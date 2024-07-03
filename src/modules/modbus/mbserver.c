@@ -18,272 +18,153 @@
  * Source file for TCP Server functionality
  */
 
-#include "modbus.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/select.h>
+#include <sys/socket.h>
+#include <errno.h>
+#include <string.h>
+#include <unistd.h>
+#include <pthread.h>
 
+#include <opendax.h>
+#include <modbus/modbus.h>
+#include "modmain.h"
+
+
+extern config_t config;
 extern dax_state *ds;
-extern pthread_barrier_t port_barrier;
-extern pthread_mutex_t port_lock;
 
 
-/* These two functions are wrappers to deal with adding and deleting
-   file descriptors to the global _fdset and dealing with _maxfd */
-static void
-_add_fd(mb_port *port, int fd)
-{
-    FD_SET(fd, &(port->fdset));
-    if(fd > port->maxfd) port->maxfd = fd;
-}
-
-static void
-_del_fd(mb_port *port, int fd)
-{
-    int n, tmpfd = 0;
-
-    FD_CLR(fd, &(port->fdset));
-
-    /* If it's the largest one then we need to re-figure _maxfd */
-    if(fd == port->maxfd) {
-        for(n = 0; n <= port->maxfd; n++) {
-            if(FD_ISSET(n, &(port->fdset))) {
-                tmpfd = n;
-            }
-        }
-        port->maxfd = tmpfd;
-    }
-}
 
 static int
-_add_connection(mb_port *port, int fd)
-{
-    struct client_buffer *new;
+__server_thread(mb_server_t *server) {
+    modbus_t *ctx = NULL;
+    modbus_mapping_t *mb_mapping;
+    int server_socket = -1;
 
-    new = malloc(sizeof(struct client_buffer));
-    if(new == NULL) return MB_ERR_ALLOC;
+    uint8_t query[MODBUS_TCP_MAX_ADU_LENGTH];
+    int master_socket;
+    int rc;
+    fd_set refset;
+    fd_set rdset;
+    int header_length;
+    /* Maximum file descriptor number */
+    int fdmax;
 
-    new->fd = fd;
-    new->buffindex = 0;
-
-    if(port->buff_head == NULL) {
-        /* If it's the first one just put it on top */
-        new->next = NULL;
-    } else {
-        /* Just jam the thing onto the top of the list */
-        new->next = port->buff_head;
+    if(server->name != NULL) {
+        dax_log(DAX_LOG_MAJOR, "Starting Server - %s %s:%s", server->name, server->host, server->protocol);
     }
-    port->buff_head = new;
-    _add_fd(port, fd);
-    return 0;
-}
+    ctx = modbus_new_tcp_pi(server->host, server->protocol);
+    header_length = modbus_get_header_length(ctx);
 
-/* Loops through the client buffer linked list of the port and sets
- * the index to 0, effectively deleting the buffers. */
-static int
-_clear_buffers(mb_port *port)
-{
-    struct client_buffer *this;
-
-    this = port->buff_head;
-
-    while(this != NULL) {
-        this->buffindex = 0;
-        this = this->next;
-    }
-    return 0;
-}
-
-static int
-_del_connection(mb_port *port, int fd)
-{
-
-    close(fd);
-    _del_fd(port, fd);
-    return 0;
-}
-
-static struct client_buffer *
-_get_buff_ptr(mb_port *port, int fd)
-{
-    struct client_buffer *this;
-
-    this = port->buff_head;
-    while(this != NULL) {
-        if(this->fd == fd) {
-            return this;
-        }
-        this = this->next;
-    }
-    return NULL;
-}
-
-static int
-_mb_read(mb_port *port, int fd)
-{
-    int result, size;
-    unsigned char buff[100];
-    struct client_buffer *cc;
-    uint16_t msgsize;
-
-    size = 100;
-    result = read(fd, buff, size);
-    if(result < 0) {
-        return MB_ERR_RECV_FAIL;
-    } if(result == 0) { /* EOF means the other guy is closed */
-        return MB_ERR_NO_SOCKET;
-    }
-
-    cc = _get_buff_ptr(port, fd);
-    assert(cc != NULL); /* If we get this far cc should exist in the port */
-
-    /* Check that we haven't received too big of a message */
-    if((result + cc->buffindex) > MB_BUFF_SIZE) {
-        return MB_ERR_OVERFLOW;
-    }
-    memcpy(&(cc->buff[cc->buffindex]), buff, result); /* Copy the new data to the buffer */
-    cc->buffindex += result;
-    if(cc->buffindex > 5) {
-        COPYWORD(&msgsize, (uint16_t *)&cc->buff[4]); /* Get the Modbus Message size */
-        if(cc->buffindex >= (msgsize + 6)) {
-            if(port->in_callback) {
-                port->in_callback(port, cc->buff, cc->buffindex);
-            }
-
-            result = create_response(port, &(cc->buff[6]), MB_BUFF_SIZE - 6);
-            if(result > 0) { /* We have a response */
-                msgsize = result;
-                COPYWORD(&(cc->buff[4]), &msgsize);
-                if(port->out_callback) {
-                    port->out_callback(port, cc->buff, result + 6);
-                }
-                write(cc->fd, cc->buff, result + 6);
-                cc->buffindex = 0;
-            } else if(result < 0) {
-                dax_log(DAX_LOG_ERROR, "Error Code Returned %d", result);
-                return result;
-            }
-        }
-    }
-    return 0;
-}
-
-/* Open a socket to listen */
-static int
-_server_listen(mb_port *port)
-{
-    struct sockaddr_in addr;
-    int fd;
-
-    fd = socket(AF_INET, SOCK_STREAM, 0);
-    if(fd < 0) {
+    mb_mapping = modbus_mapping_new(16, 16, 16, 16);
+    if (mb_mapping == NULL) {
+        dax_log(DAX_LOG_ERROR, "Failed to allocate the mapping: %s", modbus_strerror(errno));
+        modbus_free(ctx);
         return -1;
     }
-    bzero(&addr, sizeof(addr));
 
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(port->bindport);
-    addr.sin_addr.s_addr = inet_addr(port->ipaddress);
-
-    if(bind(fd, (const struct sockaddr *)&addr, sizeof(addr))) {
-        dax_log(DAX_LOG_ERROR, "Failed to bind %s:%d", port->ipaddress, port->bindport);
-        close(fd);
-        pthread_barrier_wait(&port_barrier);
+    server_socket = modbus_tcp_pi_listen(ctx, 8);
+    if (server_socket == -1) {
+        dax_log(DAX_LOG_ERROR, "Unable to listen TCP connection");
+        modbus_free(ctx);
         return -1;
     }
-    /* Wait for all of the ports to bind */
-    pthread_barrier_wait(&port_barrier);
-    /* Wait for the main thread to change our user / group ids */
-    pthread_mutex_lock(&port_lock);
-    pthread_mutex_unlock(&port_lock); /* We don't do anything but wait so unlock here */
-    if(listen(fd, 5) < 0) {
-        dax_log(DAX_LOG_ERROR, "Failed to listen%s:%d", port->ipaddress, port->bindport);
-        close(fd);
-        return -1;
-    }
-    /* We store this fd so that we know what socket we are listening on */
-    port->fd = fd;
-    _add_fd(port, fd);
-
-    return 0;
-}
-
-/* This function blocks waiting for a message to be received.  Once a message
- * is retrieved from the system the proper handling function is called */
-int
-_receive(mb_port *port)
-{
-    fd_set tmpset;
-    struct timeval tm;
-    struct sockaddr_in addr;
-    int result, fd, n;
-    socklen_t len = 0;
-
-    FD_ZERO(&tmpset);
-    FD_COPY(&(port->fdset), &tmpset);
-    tm.tv_sec = 1; /* TODO: this should be configuration */
-    tm.tv_usec = 0;
-
-    result = select(port->maxfd + 1, &tmpset, NULL, NULL, &tm);
-
-    if(result < 0) {
-        /* Ignore interruption by signal */
-        if(errno == EINTR) {
-            ; /* TODO: check to see if we should die here */
-        } else {
-            /* TODO: Deal with these errors */
-            return MB_ERR_RECV_FAIL;
-        }
-    } else if(result == 0) { /* Timeout */
-        _clear_buffers(port); /* this erases all of the _buffer nodes */
-        return 0;
-    } else {
-        for(n = 0; n <= port->maxfd; n++) {
-            if(FD_ISSET(n, &tmpset)) {
-                if(n == port->fd) { /* This is a listening socket */
-                    fd = accept(n, (struct sockaddr *)&addr, &len);
-                    if(fd < 0) {
-                        /* TODO: Need to handle these communication errors */
-                        dax_log(DAX_LOG_ERROR, "Error Accepting socket: %s", strerror(errno));
-                    } else {
-                        dax_log(DAX_LOG_MAJOR, "Accepted socket on fd %d", n);
-                        _add_connection(port, fd);
-                    }
-                } else {
-                    result = _mb_read(port, n);
-                    if(result == MB_ERR_NO_SOCKET) { /* This is the end of file */
-                        dax_log(DAX_LOG_MAJOR, "Disconnected socket on fd %d", n);
-                        _del_connection(port, n);
-                    } else if(result < 0) {
-                        return result; /* Pass the error up */
-                    }
-                }
-            }
-        }
-    }
-    return 0;
-}
 
 
-int
-server_loop(mb_port *port)
-{
-    int result;
+    /* Clear the reference set of socket */
+    FD_ZERO(&refset);
+    /* Add the server socket */
+    FD_SET(server_socket, &refset);
 
-    result = _server_listen(port);
-    if(result) {
-        dax_log(DAX_LOG_ERROR, "Failed to listen on port - %s", strerror(errno));
-        return result;
-    } else {
-        dax_log(DAX_LOG_MAJOR, "Listening on file descriptor %d", port->fd);
-    }
+    /* Keep track of the max file descriptor */
+    fdmax = server_socket;
+
     while(1) {
-        result = _receive(port);
-        if(result) {
-            if(result == MB_ERR_OVERFLOW) {
-                dax_log(DAX_LOG_ERROR, "Buffer Overflow Attempt");
+        rdset = refset;
+        if (select(fdmax + 1, &rdset, NULL, NULL, NULL) == -1) {
+            if(errno != EINTR) {
+                dax_log(DAX_LOG_ERROR, "Server select() failure - %s", strerror(errno));
+            }
+            return -1;
+        }
+
+        /* Run through the existing connections looking for data to be
+         * read */
+        for (master_socket = 0; master_socket <= fdmax; master_socket++) {
+
+            if (!FD_ISSET(master_socket, &rdset)) {
+                continue;
+            }
+
+            if (master_socket == server_socket) {
+                /* A client is asking a new connection */
+                socklen_t addrlen;
+                struct sockaddr_in clientaddr;
+                int newfd;
+
+                /* Handle new connections */
+                addrlen = sizeof(clientaddr);
+                memset(&clientaddr, 0, sizeof(clientaddr));
+                newfd = accept(server_socket, (struct sockaddr *) &clientaddr, &addrlen);
+                if (newfd == -1) {
+                    dax_log(DAX_LOG_ERROR, "Server accept returned error - %s", strerror(errno));
+                } else {
+                    FD_SET(newfd, &refset);
+
+                    if (newfd > fdmax) {
+                        /* Keep track of the maximum */
+                        fdmax = newfd;
+                    }
+                    dax_log(DAX_LOG_MINOR, "New connection from %s:%d on socket %d",
+                           inet_ntoa(clientaddr.sin_addr),
+                           clientaddr.sin_port,
+                           newfd);
+                }
             } else {
-                return result;
+                modbus_set_socket(ctx, master_socket);
+                rc = modbus_receive(ctx, query);
+                if (rc > 0) {
+                    if(query[header_length] == 0x03) {
+                        mb_mapping->tab_registers[0]++;
+                    }
+                    modbus_reply(ctx, query, rc, mb_mapping);
+                } else if (rc == -1) {
+                    /* This example server in ended on connection closing or
+                     * any errors. */
+                    dax_log(DAX_LOG_MINOR, "Connection closed on socket %d", master_socket);
+                    close(master_socket);
+
+                    /* Remove from reference set */
+                    FD_CLR(master_socket, &refset);
+
+                    if (master_socket == fdmax) {
+                        fdmax--;
+                    }
+                }
             }
         }
     }
-    return -1; /* Can never get here */
+    return 0;
 }
 
+
+int
+start_servers(void) {
+    pthread_attr_t attr;
+
+    pthread_attr_init(&attr);
+    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+
+    for(int n=0; n<config.servercount; n++) {
+        if(pthread_create(&config.servers[n].thread, &attr, (void *)&__server_thread, (void *)&config.servers[n])) {
+            dax_log(DAX_LOG_ERROR, "Unable to start thread for port - %s", config.servers[n].name);
+        } else {
+            dax_log(DAX_LOG_MAJOR, "Started Thread for server - %s", config.servers[n].name);
+        }
+    }
+    return 0;
+}

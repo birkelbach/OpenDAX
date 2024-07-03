@@ -20,7 +20,7 @@
 #define __OPTIONS_H
 
 #include <opendax.h>
-#include "modbus.h"
+#include "modmain.h"
 
 
 #ifndef DEFAULT_DEVICE
@@ -39,7 +39,7 @@ struct Config {
     int portcount;   /* Number of ports that are assigned */
     int portsize;    /* Number of ports that are allocated */
     pthread_t *threads; /* The port threads */
-    mb_port **ports; /* Pointer to an array of ports */
+//    mb_port **ports; /* Pointer to an array of ports */
 };
 
 typedef struct cmd_temp_data {

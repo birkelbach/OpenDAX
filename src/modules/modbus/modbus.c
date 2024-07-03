@@ -73,7 +73,7 @@ mb_run_port(struct mb_port *m_port)
             } else if(m_port->type == MB_SLAVE) {
                 if(m_port->protocol == MB_TCP) {
                     dax_log(DAX_LOG_MAJOR, "Start Server Loop for port %s", m_port->name);
-                    result = server_loop(m_port);
+                    result = server_thread(m_port);
                     if(result) dax_log(DAX_LOG_ERROR, "Server loop exited with error, %d port %s", result, m_port->name);
                 } else {
                     pthread_barrier_wait(&port_barrier); /* Doesn't matter since the port is already open */

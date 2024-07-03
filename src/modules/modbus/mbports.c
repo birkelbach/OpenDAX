@@ -18,7 +18,8 @@
  * Source file for mb_port handling functions
  */
 
-#include "modbus.h"
+#include <opendax.h>
+#include "modmain.h"
 
 extern dax_state *ds;
 
