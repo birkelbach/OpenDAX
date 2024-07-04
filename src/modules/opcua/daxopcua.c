@@ -1,8 +1,10 @@
 #include <open62541/server.h>
-
+#include <open62541/server_config_default.h>
 #include <open62541/plugin/log_stdout.h>
 
 #include <stdio.h>
+
+static volatile UA_Boolean running = true;
 
 static void
 addVariable(UA_Server *server) {
@@ -106,7 +108,8 @@ int main(void) {
     writeVariable(server);
     writeWrongVariable(server);
 
-    UA_StatusCode retval = UA_Server_runUntilInterrupt(server);
+    //UA_StatusCode retval = UA_Server_runUntilInterrupt(server);
+    UA_StatusCode retval = UA_Server_run(server, &running);
     UA_Server_delete(server);
     return retval == UA_STATUSCODE_GOOD ? EXIT_SUCCESS : EXIT_FAILURE;
 }
