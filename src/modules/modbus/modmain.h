@@ -23,6 +23,7 @@
 
 #include <arpa/inet.h>
 #include <modbus/modbus.h>
+#include <stdint.h>
 
 /* calculates the number of bytes needed for x number of bits */
 #define BYTE_COUNT(x) ((x)%8==0 ? (x)/8 : (x)/8+1)
@@ -168,16 +169,20 @@ typedef struct {
 
 typedef struct mb_server {
     char *name;               /* Port name if needed : Maybe we don't need this */
-    unsigned char enable;     /* 0=Pause, 1=Run */
+    uint8_t enable;     /* 0=Pause, 1=Run */
+    tag_handle h;
     char *host;
     char *protocol;
     pthread_t thread;
+    pthread_mutex_t lock;
+
     mb_node_t *nodes[MB_MAX_SLAVE_NODES];      /* Individual node units */
 } mb_server_t;
 
 typedef struct mb_slave {
     char *name;               /* Port name if needed : Maybe we don't need this */
-    unsigned char enable;     /* 0=Pause, 1=Run */
+    uint8_t enable;     /* 0=Pause, 1=Run */
+    tag_handle h;
 
     char *device;             /* device filename of the serial port */
     int baudrate;
@@ -191,7 +196,7 @@ typedef struct mb_slave {
 
 typedef struct mb_client {
     char *name;               /* Port name if needed : Maybe we don't need this */
-    unsigned char enable;     /* 0=Pause, 1=Run */
+    uint8_t enable;     /* 0=Pause, 1=Run */
     uint8_t persist;
 
     pthread_t thread;
@@ -200,7 +205,7 @@ typedef struct mb_client {
 
 typedef struct mb_master {
     char *name;               /* Port name if needed : Maybe we don't need this */
-    unsigned char enable;     /* 0=Pause, 1=Run */
+    uint8_t enable;     /* 0=Pause, 1=Run */
     uint8_t persist;
 
     char *device;             /* device filename of the serial port */
@@ -342,10 +347,14 @@ typedef struct config {
 // /* Protocol Functions - defined in modbus.c */
 // int create_response(mb_port * port, unsigned char *buff, int size);
 
-/* Configuration Functions */
+/* Configuration Functions - modopt.c*/
 int modbus_configure(int, const char **);
 
-/* Database functions */
+/* Lua interface functions - mbluaif.c */
+int run_lua_callback(int fidx, uint8_t node, uint8_t function, uint16_t index, uint16_t count);
+
+/* Database functions - database.c */
+void get_bytes_from_bits(uint8_t *src, uint16_t count, uint8_t *dest);
 void slave_write_database(tag_index idx, int reg, int offset, int count, void *data);
 void slave_read_database(tag_index idx, int reg, int offset, int count, void *data);
 

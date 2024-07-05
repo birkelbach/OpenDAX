@@ -464,11 +464,6 @@ main (int argc, const char * argv[]) {
 
     dax_set_disconnect_callback(ds, getout);
 
-    // config.threads = malloc(sizeof(pthread_t) * config.portcount);
-    // if(config.threads == NULL) {
-    //     dax_log(DAX_LOG_FATAL, "Unable to allocate memory for port threads!");
-    // }
-
     // pthread_attr_init(&attr);
     // pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
     // pthread_mutex_init(&port_lock, NULL);
@@ -527,13 +522,6 @@ void
 catchpipe(int sig)
 {
     ;
-    //int n;
-
-    //for(n = 0; n < config.portcount; n++) {
-        //if(pthread_equal(pthread_self(), config.ports[n].thread)) {
-            //mb_kill_port_thread(config.ports[n]);
-        //}
-    //}
 }
 
 static void
@@ -545,27 +533,3 @@ getout(int exitcode)
     exit(exitcode);
 }
 
-/* TODO: Change these to dax logging function */
-/* Callback functions for printing the serial traffic */
-// void
-// outdata(mb_port *mp, uint8_t *buff, unsigned int len)
-// {
-//    int n;
-//    printf("%s:->", mp->name);
-//    for(n = 0; n < len; n++) {
-//        printf("(%X)", buff[n]);
-//    }
-//    printf("\n");
-// }
-
-// void
-// indata(mb_port *mp, uint8_t *buff, unsigned int len)
-// {
-//    int n;
-
-//    printf("%s:<-", mp->name);
-//    for(n = 0; n < len; n++) {
-//        printf("[%X]",buff[n]);
-//    }
-//    printf("\n");
-// }

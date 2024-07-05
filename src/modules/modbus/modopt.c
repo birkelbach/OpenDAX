@@ -32,6 +32,7 @@
 #include <getopt.h>
 #include <termios.h>
 #include <signal.h>
+#include <ctype.h>
 
 #include "modmain.h"
 
@@ -65,6 +66,25 @@ __initserver(mb_server_t *s)
     s->enable = 1;
 };
 
+static int
+_validate_name(char *name, int len)
+{
+    int n;
+    if(strlen(name) > len) {
+        return ERR_2BIG;
+    }
+    /* First character has to be a letter or '_' */
+    if( !isalpha(name[0]) && name[0] != '_') {
+        return ERR_ARG;
+    }
+    /* The rest of the name can be letters, numbers or '_' */
+    for(n = 1; n < strlen(name) ; n++) {
+        if( !isalpha(name[n]) && (name[n] != '_') && !isdigit(name[n]) ) {
+            return ERR_ARG;
+        }
+    }
+    return 0;
+}
 
 // static inline int
 // _get_serial_config(lua_State *L, mb_port *p)
@@ -180,6 +200,7 @@ static int
 _add_server(lua_State *L)
 {
     int luatype;
+    char *name;
     mb_server_t *server;
     mb_server_t *newservers;
     mb_type_t *udata;
@@ -218,14 +239,29 @@ _add_server(lua_State *L)
 
     luatype = lua_getfield(L, -1, "name");
     if(luatype == LUA_TNIL) {
-        server->name = NULL;
+        luaL_error(L, "Name is required for server");
     } else {
-        server->name = strdup((char *)lua_tostring(L, -1));
+        name = (char *)lua_tostring(L, -1);
+        for(int n=0; n<config.servercount; n++) {
+            if(strcmp(config.servers[n].name, name) == 0) {
+                luaL_error(L, "Server name must be unique");
+            }
+        }
+        /* Check the name.  We subtract 3 from the tagname size because we'll be adding '_en' to create the enable tag. */
+        if(_validate_name(name, DAX_TAGNAME_SIZE - 3)) {
+            luaL_error(L, "Server name is not valid");
+        }
     }
+    /* If everything passes then allocate and assign the name */
+    server->name = strdup(name);
     lua_pop(L, 1);
 
-    lua_getfield(L, -1, "enable");
-    server->enable = (char)lua_toboolean(L, -1);
+    luatype = lua_getfield(L, -1, "enable");
+    if(luatype == LUA_TNIL) {
+        server->enable = 1;
+    } else {
+        server->enable = (char)lua_toboolean(L, -1);
+    }
     lua_pop(L, 1);
 
     /* IP address or hostname */

@@ -23,6 +23,17 @@
 extern dax_state *ds;
 
 void
+get_bytes_from_bits(uint8_t *src, uint16_t count, uint8_t *dest) {
+    for(int n=0; n<count; n++) {
+        if(src[n]) {
+            dest[n/8] |= (0x01 << n%8);
+        } else {
+            dest[n/8] &= ~(0x01 << n%8);
+        }
+    }
+}
+
+void
 slave_write_database(tag_index idx, int reg, int offset, int count, void *data)
 {
     int result;

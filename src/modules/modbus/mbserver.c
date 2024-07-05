@@ -41,13 +41,27 @@ extern pthread_barrier_t startup_barrier;
 static int header_length;
 
 static void
+__server_enable_callback(dax_state *_ds, void *ud) {
+    //uint8_t bits;
+    mb_server_t *server = (mb_server_t *)ud;
+    /* TODO This isn't working */
+    //dax_event_get_data(_ds, &bits, 1);
+    dax_read_tag(ds, server->h, &server->enable);
+}
+
+
+static void
 __send_reply(mb_node_t **nodes, int rc, modbus_t *ctx, uint8_t *query) {
     uint8_t unitid;
     uint8_t fc;
+    uint16_t index, count;
     mb_node_t *node;
+    int result;
 
     unitid = query[header_length -1];
     fc = query[header_length];
+    index = query[header_length+1]<<8 | query[header_length+2];
+    count = query[header_length+3]<<8 | query[header_length+4];
 
     if(nodes[unitid] != NULL) {
         node = nodes[unitid];
@@ -55,6 +69,14 @@ __send_reply(mb_node_t **nodes, int rc, modbus_t *ctx, uint8_t *query) {
         node = nodes[0];
     } else { /* No node is defined so we'll just bail out here */
         return;
+    }
+
+    if(fc==1 || fc==2 || fc==3 || fc==4) {
+        result = run_lua_callback(nodes[unitid]->read_callback, unitid, fc, index, count);
+        if(result) {
+            modbus_reply_exception(ctx, query, result);
+            return;
+        }
     }
 
     switch(fc) {
@@ -86,9 +108,31 @@ __send_reply(mb_node_t **nodes, int rc, modbus_t *ctx, uint8_t *query) {
             }
             modbus_reply(ctx, query, rc, node->mb_mapping);
             break;
+        case 5:
+        case 15:
+            modbus_reply(ctx, query, rc, node->mb_mapping);
+            if(node->coil_idx) {
+                get_bytes_from_bits(node->mb_mapping->tab_bits, node->coil_size, node->coil_buffer);
+                /* We have to read into this temporary buffer because libmodbus doesn't store bits the
+                   same way that we do so we have to use conversion functions */
+                slave_write_database(node->coil_idx, MB_REG_COIL, 0, node->coil_size, node->coil_buffer);
+            }
+        case 6:
+        case 16:
+            modbus_reply(ctx, query, rc, node->mb_mapping);
+            if(node->hold_idx) {
+                slave_write_database(node->hold_idx, MB_REG_HOLDING, 0, node->hold_size, node->mb_mapping->tab_registers);
+            }
         default:
            modbus_reply_exception(ctx, query, MODBUS_EXCEPTION_ILLEGAL_FUNCTION);
            return;
+    }
+    if(fc==5 || fc==6 || fc==15 || fc==16) {
+        result = run_lua_callback(nodes[unitid]->write_callback, unitid, fc, index, count);
+        if(result) {
+            modbus_reply_exception(ctx, query, result);
+            return;
+        }
     }
 
 }
@@ -114,14 +158,6 @@ __server_thread(mb_server_t *server) {
     ctx = modbus_new_tcp_pi(server->host, server->protocol);
     header_length = modbus_get_header_length(ctx);
 
-    //mb_mapping = modbus_mapping_new(16, 16, 16, 16);
-    //mb_mapping = modbus_mapping_new_start_address(0,2,0,2,0,1600,0,16);
-    // if (mb_mapping == NULL) {
-    //     dax_log(DAX_LOG_ERROR, "Failed to allocate the mapping: %s", modbus_strerror(errno));
-    //     modbus_free(ctx);
-    //     return -1;
-    // }
-
     server_socket = modbus_tcp_pi_listen(ctx, 8);
     //pthread_barrier_wait(&startup_barrier);
     if (server_socket == -1) {
@@ -129,8 +165,6 @@ __server_thread(mb_server_t *server) {
         modbus_free(ctx);
         return -1;
     }
-
-
 
     /* Clear the reference set of socket */
     FD_ZERO(&refset);
@@ -184,7 +218,7 @@ __server_thread(mb_server_t *server) {
             } else {
                 modbus_set_socket(ctx, master_socket);
                 rc = modbus_receive(ctx, query);
-                if (rc > 0) {
+                if (rc > 0 && server->enable) {
                     __send_reply(server->nodes, rc, ctx, query);
 
                 } else if (rc == -1) {
@@ -210,18 +244,20 @@ __server_thread(mb_server_t *server) {
 /* nodes is the array in the server or slave object
    name is just here for logging errors */
 static int
-__create_node_tags(mb_node_t **nodes, char *name) {
+__create_server_tags(mb_server_t *server) {
     int result;
     mb_node_t *node;
     tag_handle h;
+    char tagname[DAX_TAGNAME_SIZE+1];
+    dax_id id;
 
     for(int n=0; n<MB_MAX_SLAVE_NODES; n++) {
-        node = nodes[n]; /* Just for convenience */
+        node = server->nodes[n]; /* Just for convenience */
         if(node != NULL) {
             if(node->hold_name != NULL) {
                 result = dax_tag_add(ds, &h, node->hold_name, DAX_UINT, node->hold_size, 0);
                 if(result) {
-                    dax_log(DAX_LOG_ERROR, "Unable to add tag %s as holding register for %s", node->hold_name, name);
+                    dax_log(DAX_LOG_ERROR, "Unable to add tag %s as holding register for %s", node->hold_name, server->name);
                     free(node->hold_name);
                     node->hold_name = NULL; /* so we know we don't have a tag */
                     node->hold_size = 0;
@@ -232,7 +268,7 @@ __create_node_tags(mb_node_t **nodes, char *name) {
             if(node->input_name != NULL) {
                 result = dax_tag_add(ds, &h, node->input_name, DAX_UINT, node->input_size, 0);
                 if(result) {
-                    dax_log(DAX_LOG_ERROR, "Unable to add tag %s as input register for %s", node->input_name, name);
+                    dax_log(DAX_LOG_ERROR, "Unable to add tag %s as input register for %s", node->input_name, server->name);
                     free(node->input_name);
                     node->input_name = NULL; /* so we know we don't have a tag */
                     node->input_size = 0;
@@ -243,7 +279,7 @@ __create_node_tags(mb_node_t **nodes, char *name) {
             if(node->coil_name != NULL) {
                 result = dax_tag_add(ds, &h, node->coil_name, DAX_BOOL, node->coil_size, 0);
                 if(result) {
-                    dax_log(DAX_LOG_ERROR, "Unable to add tag %s as coil register for %s", node->coil_name, name);
+                    dax_log(DAX_LOG_ERROR, "Unable to add tag %s as coil register for %s", node->coil_name, server->name);
                     free(node->coil_name);
                     node->coil_name = NULL; /* so we know we don't have a tag */
                     node->coil_size = 0;
@@ -251,7 +287,7 @@ __create_node_tags(mb_node_t **nodes, char *name) {
                     node->coil_idx = h.index;
                     node->coil_buffer = malloc(node->coil_size);
                     if(node->coil_buffer == NULL) {
-                        dax_log(DAX_LOG_ERROR, "Unable to allocate buffer for coils %s", name);
+                        dax_log(DAX_LOG_ERROR, "Unable to allocate buffer for coils %s", server->name);
                         free(node->coil_name);
                         node->coil_name = NULL; /* so we know we don't have a tag */
                         node->coil_size = 0;
@@ -261,7 +297,7 @@ __create_node_tags(mb_node_t **nodes, char *name) {
             if(node->disc_name != NULL) {
                 result = dax_tag_add(ds, &h, node->disc_name, DAX_BOOL, node->disc_size, 0);
                 if(result) {
-                    dax_log(DAX_LOG_ERROR, "Unable to add tag %s as discrete inputs register for %s", node->disc_name, name);
+                    dax_log(DAX_LOG_ERROR, "Unable to add tag %s as discrete inputs register for %s", node->disc_name, server->name);
                     free(node->disc_name);
                     node->disc_name = NULL; /* so we know we don't have a tag */
                     node->disc_size = 0;
@@ -269,7 +305,7 @@ __create_node_tags(mb_node_t **nodes, char *name) {
                     node->disc_idx = h.index;
                     node->disc_buffer = malloc(node->coil_size);
                     if(node->disc_buffer == NULL) {
-                        dax_log(DAX_LOG_ERROR, "Unable to allocate buffer for discretes %s", name);
+                        dax_log(DAX_LOG_ERROR, "Unable to allocate buffer for discretes %s", server->name);
                         free(node->disc_name);
                         node->disc_name = NULL; /* so we know we don't have a tag */
                         node->disc_size = 0;
@@ -292,6 +328,13 @@ __create_node_tags(mb_node_t **nodes, char *name) {
 
         }
     }
+    snprintf(tagname, DAX_TAGNAME_SIZE, "%s_en", server->name);
+    if(dax_tag_add(ds, &server->h, tagname, DAX_BOOL, 1, 0)) {
+        dax_log(DAX_LOG_ERROR, "Unable to create server enable tag '%s'", tagname);
+    } else {
+        dax_tag_write(ds, server->h, &server->enable);
+        dax_event_add(ds, &server->h, EVENT_CHANGE, NULL, &id, __server_enable_callback, server, NULL);
+    }
     return 0;
 }
 
@@ -303,9 +346,8 @@ start_servers(void) {
     pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
 
     for(int n=0; n<config.servercount; n++) {
-        if(__create_node_tags(config.servers[n].nodes, config.servers[n].name)) {
-            dax_log(DAX_LOG_ERROR, "Unable to start server: %s", config.servers[n].name);
-        } else {
+        if(__create_server_tags(&config.servers[n]) == 0) {
+
             if(pthread_create(&config.servers[n].thread, &attr, (void *)&__server_thread, (void *)&config.servers[n])) {
                 dax_log(DAX_LOG_ERROR, "Unable to start thread for port - %s", config.servers[n].name);
             } else {
