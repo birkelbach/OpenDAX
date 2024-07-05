@@ -31,12 +31,11 @@
 #include <pthread.h>
 #include "modmain.h"
 
-//extern struct Config config;
-/* For now we'll keep ds as a global to simplify the code.  At some
- * point when the luaif library is complete it'll be stored in the
- * Lua_State Registry. */
+extern config_t config;
 dax_state *ds;
-pthread_barrier_t port_barrier;
+/* This barrier is used to make sure that we are passed all of the parts of the system
+   that might need elevated permissions to function like opening ports. */
+pthread_barrier_t startup_barrier;
 pthread_mutex_t port_lock;
 
 static int _caught_signal;
@@ -45,6 +44,8 @@ void catchsignal(int sig);
 void catchpipe(int sig);
 
 static void getout(int);
+
+
 
 // void outdata(mb_port *,uint8_t *,unsigned int);
 // void indata(mb_port *,uint8_t *,unsigned int);
@@ -369,63 +370,65 @@ static void getout(int);
 //     return result;
 // }
 
-static int
-_demote_wait(void)
-{
-    struct passwd *pw;
-    struct group *gr;
-    char *user;
-    char *group;
-    int result;
-    int retval = 0;
 
-    /* All this is to coordinate all of the server ports so that we can
-    demote our uid and gid after we bind to our port and get our
-    serial ports open */
-    pthread_mutex_lock(&port_lock);
-    pthread_barrier_wait(&port_barrier);
+/* This function waits until all the barriers have been synched since which should
+   indicate that we are passed any point where elevated permissions are needed. */
+// static int
+// _demote_wait(void)
+// {
+//     struct passwd *pw;
+//     struct group *gr;
+//     char *user;
+//     char *group;
+//     int result;
+//     int retval = 0;
 
-    user = dax_get_attr(ds, "user");
-    group = dax_get_attr(ds, "group");
-    if(user != NULL) {
-        pw = getpwnam(user);
-        if(pw != NULL) {
-            dax_log(DAX_LOG_MINOR, "Setting user to '%s' %d", user, pw->pw_uid);
-            result = setuid(pw->pw_uid);
-            if(result) {
-                dax_log(DAX_LOG_FATAL, "Unable to set uid %d - %s", pw->pw_uid, strerror(errno));
-                retval++;
-            }
-        } else {
-            dax_log(DAX_LOG_FATAL, "Unable to find uid for user %s", user);
-            retval++;
-        }
-    }
-    if(group != NULL) {
-        gr = getgrnam(group);
-        if(pw != NULL) {
-            dax_log(DAX_LOG_MINOR, "Setting group to '%s' %d", group, gr->gr_gid);
-            result = setgid(gr->gr_gid);
-            if(result) {
-                dax_log(DAX_LOG_FATAL, "Unable to set gid %d - %s", gr->gr_gid, strerror(errno));
-                retval++;
-            }
-        } else {
-            dax_log(DAX_LOG_FATAL, "Unable to find uid for group %s", group);
-            retval++;
-        }
-    }
+//     /* All this is to coordinate all of the server ports so that we can
+//     demote our uid and gid after we bind to our port and get our
+//     serial ports open */
+//     //pthread_mutex_lock(&port_lock);
+//     pthread_barrier_wait(&startup_barrier);
 
-    pthread_mutex_unlock(&port_lock);
-    return retval;
-}
+//     user = dax_get_attr(ds, "user");
+//     group = dax_get_attr(ds, "group");
+//     if(group != NULL) {
+//         gr = getgrnam(group);
+//         if(gr != NULL) {
+//             dax_log(DAX_LOG_MINOR, "Setting group to '%s' %d", group, gr->gr_gid);
+//             result = setegid(gr->gr_gid);
+//             if(result) {
+//                 dax_log(DAX_LOG_FATAL, "Unable to set gid %d - %s", gr->gr_gid, strerror(errno));
+//                 retval++;
+//             }
+//         } else {
+//             dax_log(DAX_LOG_FATAL, "Unable to find uid for group %s", group);
+//             retval++;
+//         }
+//     }
+//     if(user != NULL) {
+//         pw = getpwnam(user);
+//         if(pw != NULL) {
+//             dax_log(DAX_LOG_MINOR, "Setting user to '%s' %d", user, pw->pw_uid);
+//             result = seteuid(pw->pw_uid);
+//             if(result) {
+//                 dax_log(DAX_LOG_FATAL, "Unable to set uid %d - %s", pw->pw_uid, strerror(errno));
+//                 retval++;
+//             }
+//         } else {
+//             dax_log(DAX_LOG_FATAL, "Unable to find uid for user %s", user);
+//             retval++;
+//         }
+//     }
+
+//     //pthread_mutex_unlock(&port_lock);
+//     return retval;
+// }
 
 int
 main (int argc, const char * argv[]) {
-    int result, n, master_errors=-1;
+    int result;
     uint32_t loop_count=0;
     struct sigaction sa;
-    pthread_attr_t attr;
 
     /* Set up the signal handlers */
     memset (&sa, 0, sizeof(struct sigaction));
@@ -454,10 +457,12 @@ main (int argc, const char * argv[]) {
         exit(result);
     }
 
-    // if( dax_connect(ds) ) {
-    //     dax_log(DAX_LOG_FATAL, "Unable to connect to OpenDAX server!");
-    //     kill(getpid(), SIGQUIT);
-    // }
+    if( dax_connect(ds) ) {
+        dax_log(DAX_LOG_FATAL, "Unable to connect to OpenDAX server!");
+        kill(getpid(), SIGQUIT);
+    }
+
+    dax_set_disconnect_callback(ds, getout);
 
     // config.threads = malloc(sizeof(pthread_t) * config.portcount);
     // if(config.threads == NULL) {
@@ -467,24 +472,13 @@ main (int argc, const char * argv[]) {
     // pthread_attr_init(&attr);
     // pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
     // pthread_mutex_init(&port_lock, NULL);
-    // pthread_barrier_init(&port_barrier, NULL, config.portcount + 1);
-    // for(n = 0; n < config.portcount; n++) {
-    //     if(_setup_port(config.ports[n])) {
-    //         dax_log(DAX_LOG_ERROR, "Problem setting up port - %s", config.ports[n]->name);
-    //     } else {
-    //         mb_set_msgout_callback(config.ports[n], outdata);
-    //         mb_set_msgin_callback(config.ports[n], indata);
-    //         if(pthread_create(&config.threads[n], &attr, (void *)&_port_thread, (void *)config.ports[n])) {
-    //             dax_log(DAX_LOG_ERROR, "Unable to start thread for port - %s", config.ports[n]->name);
-    //         } else {
-    //             dax_log(DAX_LOG_MAJOR, "Started Thread for port - %s", config.ports[n]->name);
-    //         }
-    //     }
-    // }
-    //if(_demote_wait()) getout(-1);
-    //dax_set_running(ds, 1);
+    int bcount = config.servercount + config.slavecount + config.clientcount + config.mastercount +1;
+    pthread_barrier_init(&startup_barrier, NULL, bcount);
 
     start_servers();
+    /* This is fatal because we might be root and we don't want to keep running as root if this failed. */
+    //if(_demote_wait()) getout(-1);
+    dax_set_running(ds, 1);
 
     while(1) {
     //     /* for the first minute or until we have all the errors clear in the event
@@ -532,7 +526,8 @@ void catchsignal(int sig) {
 void
 catchpipe(int sig)
 {
-    int n;
+    ;
+    //int n;
 
     //for(n = 0; n < config.portcount; n++) {
         //if(pthread_equal(pthread_self(), config.ports[n].thread)) {
@@ -544,15 +539,9 @@ catchpipe(int sig)
 static void
 getout(int exitcode)
 {
-    int n;
     dax_log(DAX_LOG_MAJOR, "Modbus Module Exiting");
     dax_disconnect(ds);
 
-    // for(n = 0; n < config.portcount; n++) {
-    // /* TODO: Should probably stop the running threads here and then close the ports */
-    //     mb_close_port(config.ports[n]);
-    //     mb_destroy_port(config.ports[n]);
-    // }
     exit(exitcode);
 }
 

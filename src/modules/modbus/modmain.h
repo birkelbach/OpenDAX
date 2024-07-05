@@ -22,6 +22,10 @@
 #define __MODBUS_H
 
 #include <arpa/inet.h>
+#include <modbus/modbus.h>
+
+/* calculates the number of bytes needed for x number of bits */
+#define BYTE_COUNT(x) ((x)%8==0 ? (x)/8 : (x)/8+1)
 
 /* Parity */
 #define MB_NONE 0
@@ -106,8 +110,10 @@ typedef struct {
 typedef struct mb_cmd {
     unsigned char enable;    /* 0=disable, 1=enable */
     unsigned char mode;      /* MB_CONTINUOUS, MB_ONCHANGE, MB_ONWRITE, MB_TRIGGER */
-    struct in_addr ip_address;     /* IP address for TCP requests */
-    uint16_t port;           /* TCP port to connect to */
+
+    char *host;
+    char *protocol;
+
     uint8_t node;            /* Modbus device ID */
     uint8_t function;        /* Function Code */
     uint16_t m_register;     /* Modbus Register */
@@ -132,10 +138,10 @@ typedef struct mb_cmd {
     tag_handle data_h;       /* Handle to data tag */
 
     struct mb_cmd* next;
-} mb_cmd;
+} mb_cmd_t;
 
 /* This holds all of the information to define a register set for a single unit id */
-typedef struct mb_node_def {
+typedef struct {
     char *hold_name;       /* holding register tag name */
     uint16_t hold_size;    /* size of the holding register table */
     uint16_t hold_start;   /* starting address for the holding registers */
@@ -148,13 +154,16 @@ typedef struct mb_node_def {
     uint16_t coil_size;    /* size of the coils */
     uint16_t coil_start;   /* starting address for the coils */
     tag_index coil_idx;
+    uint8_t *coil_buffer;
     char *disc_name;
     uint16_t disc_size;    /* size of the discretes */
     uint16_t disc_start;   /* starting address for the discretes */
     tag_index disc_idx;
+    uint8_t *disc_buffer;
     int read_callback;
     int write_callback;
-} mb_node_def;
+    modbus_mapping_t *mb_mapping;
+} mb_node_t;
 
 
 typedef struct mb_server {
@@ -163,15 +172,61 @@ typedef struct mb_server {
     char *host;
     char *protocol;
     pthread_t thread;
-    mb_node_def **nodes;      /* Individual node units */
+    mb_node_t *nodes[MB_MAX_SLAVE_NODES];      /* Individual node units */
 } mb_server_t;
+
+typedef struct mb_slave {
+    char *name;               /* Port name if needed : Maybe we don't need this */
+    unsigned char enable;     /* 0=Pause, 1=Run */
+
+    char *device;             /* device filename of the serial port */
+    int baudrate;
+    short databits;
+    short stopbits;
+    short parity;             /* 0=NONE, 1=EVEN OR 2=ODD */
+
+    pthread_t thread;
+    mb_node_t *nodes[MB_MAX_SLAVE_NODES];      /* Individual node units */
+} mb_slave_t;
+
+typedef struct mb_client {
+    char *name;               /* Port name if needed : Maybe we don't need this */
+    unsigned char enable;     /* 0=Pause, 1=Run */
+    uint8_t persist;
+
+    pthread_t thread;
+    mb_cmd_t *cmds;
+} mb_client_t;
+
+typedef struct mb_master {
+    char *name;               /* Port name if needed : Maybe we don't need this */
+    unsigned char enable;     /* 0=Pause, 1=Run */
+    uint8_t persist;
+
+    char *device;             /* device filename of the serial port */
+    int baudrate;
+    short databits;
+    short stopbits;
+    short parity;             /* 0=NONE, 1=EVEN OR 2=ODD */
+
+    pthread_t thread;
+    mb_cmd_t *cmds;
+} mb_master_t;
 
 
 typedef struct config {
     int servercount;      /* Number of ports that are assigned */
     int serversize;       /* Number of ports that are allocated */
     mb_server_t *servers;
-    pthread_t *threads;   /* The port threads */
+    int slavecount;      /* Number of ports that are assigned */
+    int slavesize;       /* Number of ports that are allocated */
+    mb_slave_t *slaves;
+    int clientcount;      /* Number of ports that are assigned */
+    int clientsize;       /* Number of ports that are allocated */
+    mb_client_t *clients;
+    int mastercount;      /* Number of ports that are assigned */
+    int mastersize;       /* Number of ports that are allocated */
+    mb_master_t *masters;
 } config_t;
 
 
@@ -289,6 +344,11 @@ typedef struct config {
 
 /* Configuration Functions */
 int modbus_configure(int, const char **);
+
+/* Database functions */
+void slave_write_database(tag_index idx, int reg, int offset, int count, void *data);
+void slave_read_database(tag_index idx, int reg, int offset, int count, void *data);
+
 
 int start_servers(void);
 

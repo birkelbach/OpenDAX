@@ -16,14 +16,14 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
 
-#include <database.h>
 #include <pthread.h>
+#include <opendax.h>
+#include "modmain.h"
 
 extern dax_state *ds;
 
-
 void
-slave_write_database(tag_index idx, int reg, int offset, int count, uint16_t *data)
+slave_write_database(tag_index idx, int reg, int offset, int count, void *data)
 {
     int result;
     tag_handle h;
@@ -74,7 +74,7 @@ slave_write_database(tag_index idx, int reg, int offset, int count, uint16_t *da
 
 
 void
-slave_read_database(tag_index idx, int reg, int offset, int count, uint16_t *data) {
+slave_read_database(tag_index idx, int reg, int offset, int count, void *data) {
     int result;
     tag_handle h;
 
