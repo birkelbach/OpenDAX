@@ -1,115 +1,159 @@
+/*  OpenDAX - An open source data acquisition and control system
+ *  Copyright (c) 2024 Phil Birkelbach
+ *
+ *  This program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation; either version 2 of the License, or
+ *  (at your option) any later version.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program; if not, write to the Free Software
+ *  Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
+ *
+ *  Main source code file for the OpenDAX OPC UA server module
+ */
+
+#include <opendax.h>
+#include <common.h>
 #include <open62541/server.h>
 #include <open62541/server_config_default.h>
-#include <open62541/plugin/log_stdout.h>
 
-#include <stdio.h>
+#include <signal.h>
+#include <stdlib.h>
+#include <sys/types.h>
+#include <unistd.h>
 
-static volatile UA_Boolean running = true;
+#include "daxopcua.h"
 
-static void
-addVariable(UA_Server *server) {
-    /* Define the attribute of the myInteger variable node */
-    UA_VariableAttributes attr = UA_VariableAttributes_default;
-    UA_Int32 myInteger = 42;
-    UA_Variant_setScalar(&attr.value, &myInteger, &UA_TYPES[UA_TYPES_INT32]);
-    attr.description = UA_LOCALIZEDTEXT("en-US","the answer");
-    attr.displayName = UA_LOCALIZEDTEXT("en-US","the answer");
-    attr.dataType = UA_TYPES[UA_TYPES_INT32].typeId;
-    attr.accessLevel = UA_ACCESSLEVELMASK_READ | UA_ACCESSLEVELMASK_WRITE;
 
-    /* Add the variable node to the information model */
-    UA_NodeId myIntegerNodeId = UA_NODEID_STRING(1, "the.answer");
-    UA_QualifiedName myIntegerName = UA_QUALIFIEDNAME(1, "the answer");
-    UA_NodeId parentNodeId = UA_NODEID_NUMERIC(0, UA_NS0ID_OBJECTSFOLDER);
-    UA_NodeId parentReferenceNodeId = UA_NODEID_NUMERIC(0, UA_NS0ID_ORGANIZES);
-    UA_Server_addVariableNode(server, myIntegerNodeId, parentNodeId,
-                              parentReferenceNodeId, myIntegerName,
-                              UA_NODEID_NUMERIC(0, UA_NS0ID_BASEDATAVARIABLETYPE), attr, NULL, NULL);
-}
+dax_state *ds;
+UA_Boolean running = true;
 
-static void
-addMatrixVariable(UA_Server *server) {
-    UA_VariableAttributes attr = UA_VariableAttributes_default;
-    attr.displayName = UA_LOCALIZEDTEXT("en-US", "Double Matrix");
-    attr.accessLevel = UA_ACCESSLEVELMASK_READ | UA_ACCESSLEVELMASK_WRITE;
-
-    /* Set the variable value constraints */
-    attr.dataType = UA_TYPES[UA_TYPES_DOUBLE].typeId;
-    attr.valueRank = UA_VALUERANK_TWO_DIMENSIONS;
-    UA_UInt32 arrayDims[2] = {2,2};
-    attr.arrayDimensions = arrayDims;
-    attr.arrayDimensionsSize = 2;
-
-    /* Set the value. The array dimensions need to be the same for the value. */
-    UA_Double zero[4] = {0.1, 0.2, 0.3, 0.4};
-    UA_Variant_setArray(&attr.value, zero, 4, &UA_TYPES[UA_TYPES_DOUBLE]);
-    attr.value.arrayDimensions = arrayDims;
-    attr.value.arrayDimensionsSize = 2;
-
-    UA_NodeId myIntegerNodeId = UA_NODEID_STRING(1, "double.matrix");
-    UA_QualifiedName myIntegerName = UA_QUALIFIEDNAME(1, "double matrix");
-    UA_NodeId parentNodeId = UA_NODEID_NUMERIC(0, UA_NS0ID_OBJECTSFOLDER);
-    UA_NodeId parentReferenceNodeId = UA_NODEID_NUMERIC(0, UA_NS0ID_ORGANIZES);
-    UA_Server_addVariableNode(server, myIntegerNodeId, parentNodeId,
-                              parentReferenceNodeId, myIntegerName,
-                              UA_NODEID_NUMERIC(0, UA_NS0ID_BASEDATAVARIABLETYPE),
-                              attr, NULL, NULL);
-}
-
-static void
-writeVariable(UA_Server *server) {
-    UA_NodeId myIntegerNodeId = UA_NODEID_STRING(1, "the.answer");
-
-    /* Write a different integer value */
-    UA_Int32 myInteger = 43;
-    UA_Variant myVar;
-    UA_Variant_init(&myVar);
-    UA_Variant_setScalar(&myVar, &myInteger, &UA_TYPES[UA_TYPES_INT32]);
-    UA_Server_writeValue(server, myIntegerNodeId, myVar);
-
-    /* Set the status code of the value to an error code. The function
-     * UA_Server_write provides access to the raw service. The above
-     * UA_Server_writeValue is syntactic sugar for writing a specific node
-     * attribute with the write service. */
-    UA_WriteValue wv;
-    UA_WriteValue_init(&wv);
-    wv.nodeId = myIntegerNodeId;
-    wv.attributeId = UA_ATTRIBUTEID_VALUE;
-    wv.value.status = UA_STATUSCODE_BADNOTCONNECTED;
-    wv.value.hasStatus = true;
-    UA_Server_write(server, &wv);
-
-    /* Reset the variable to a good statuscode with a value */
-    wv.value.hasStatus = false;
-    wv.value.value = myVar;
-    wv.value.hasValue = true;
-    UA_Server_write(server, &wv);
-}
-
-static void
-writeWrongVariable(UA_Server *server) {
-    UA_NodeId myIntegerNodeId = UA_NODEID_STRING(1, "the.answer");
-
-    /* Write a string */
-    UA_String myString = UA_STRING("test");
-    UA_Variant myVar;
-    UA_Variant_init(&myVar);
-    UA_Variant_setScalar(&myVar, &myString, &UA_TYPES[UA_TYPES_STRING]);
-    UA_StatusCode retval = UA_Server_writeValue(server, myIntegerNodeId, myVar);
-    printf("Writing a string returned statuscode %s\n", UA_StatusCode_name(retval));
+static void stopHandler(int sign) {
+    running = false;
 }
 
 
-int main(void) {
-    UA_Server *server = UA_Server_new();
 
-    addVariable(server);
-    addMatrixVariable(server);
-    writeVariable(server);
-    writeWrongVariable(server);
 
-    //UA_StatusCode retval = UA_Server_runUntilInterrupt(server);
+/* This is a wrapper function that can be setup in the Open62541 configuration so that it calls
+   our dax_vlog function for logging. */
+static void
+__log_wrapper(void *context, UA_LogLevel level, UA_LogCategory category, const char *msg, va_list args)
+{
+    uint32_t topic;
+
+    switch(level) {
+        case UA_LOGLEVEL_TRACE:
+            return; /* Not gonna log this */
+            break;
+        case UA_LOGLEVEL_DEBUG:
+            topic = DAX_LOG_DEBUG;
+            return; /* Not this one either but maybe we'll do some config for this */
+            break;
+        case UA_LOGLEVEL_INFO:
+            topic = DAX_LOG_INFO;
+            break;
+        case UA_LOGLEVEL_WARNING:
+            topic = DAX_LOG_WARN;
+            break;
+        case UA_LOGLEVEL_ERROR:
+            topic = DAX_LOG_ERROR;
+            break;
+        case UA_LOGLEVEL_FATAL:
+            topic = DAX_LOG_FATAL;
+            break;
+        default:
+            topic = DAX_LOG_DEBUG;
+            break;
+    }
+    dax_vlog(topic, msg, args);
+}
+
+static int
+__add_tags(UA_Server *server)
+{
+    int result;
+    tag_index lastindex;
+    dax_tag tag;
+    tag_handle h;
+
+    result = dax_tag_handle(ds, &h, (char *)"_lastindex", 0);
+    if(result) {
+        dax_log(DAX_LOG_FATAL, "Unable to find handle for _lastindex");
+        return result;
+    }
+    result = dax_tag_read(ds, h, &lastindex);
+    if(result) {
+        dax_log(DAX_LOG_FATAL, "Unable to read _lastindex");
+        return result;
+    }
+    for(tag_index n = 0; n<=lastindex; n++) {
+        result = dax_tag_byindex(ds, &tag, n);
+        if(result == ERR_OK) {
+            addTagVariable(server, &tag);
+        }
+    }
+    return 0;
+}
+
+int
+main(int argc, char *argv[]) {
+    int result;
+    signal(SIGINT, stopHandler);
+    signal(SIGTERM, stopHandler);
+
+
+    ds = dax_init("daxopcua");
+    if(ds == NULL) {
+        /* dax_fatal() logs an error and causes a quit
+         * signal to be sent to the module */
+        dax_log(DAX_LOG_FATAL, "Unable to Allocate DaxState Object\n");
+        exit(-1);
+    }
+
+    result = opcua_configure(ds, argc, argv);
+    if(result) {
+        dax_log(DAX_LOG_FATAL, "Fatal error in configuration");
+        exit(result);
+    }
+
+    /* Check for OpenDAX and register the module */
+    if( dax_connect(ds) ) {
+        dax_log(DAX_LOG_FATAL, "Unable to find OpenDAX");
+        exit(-1);
+    }
+
+    UA_ServerConfig *config = (UA_ServerConfig *)UA_malloc(sizeof(UA_ServerConfig));
+    memset(config, 0, sizeof(UA_ServerConfig));
+    config->logging = (UA_Logger*)UA_malloc(sizeof(UA_Logger));
+    config->logging->log = __log_wrapper;
+    config->logging->clear = NULL;
+    config->logging->context = NULL;
+    UA_ServerConfig_setDefault(config);
+    UA_ApplicationDescription_clear(&config->applicationDescription);
+    config->applicationDescription.applicationUri = UA_String_fromChars("urn.opendax.server.application");
+    config->applicationDescription.productUri = UA_String_fromChars("https://opendax.org");
+    config->applicationDescription.applicationName = UA_LOCALIZEDTEXT_ALLOC("en", "OpenDAX OPC UA Server");
+    config->applicationDescription.applicationType = UA_APPLICATIONTYPE_SERVER;
+    UA_Server *server = UA_Server_newWithConfig(config);
+
+    if(__add_tags(server)) {
+        exit(-1);
+    }
+
+    dax_set_running(ds, 1);
+    dax_log(DAX_LOG_MINOR, "OPC UA Module Starting");
+
     UA_StatusCode retval = UA_Server_run(server, &running);
+
     UA_Server_delete(server);
+    UA_free(config->logging);
+    UA_free(config);
     return retval == UA_STATUSCODE_GOOD ? EXIT_SUCCESS : EXIT_FAILURE;
 }
