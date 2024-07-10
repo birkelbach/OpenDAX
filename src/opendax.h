@@ -32,6 +32,8 @@ extern "C" {
 #include <float.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdarg.h>
+
 
 /* This is here so modules need not include lua.h if they are not using Lua directly*/
 typedef struct lua_State lua_State;
@@ -323,6 +325,7 @@ int dax_log_set_lua_function(lua_State *L);
 void dax_log_set_default_mask(uint32_t mask);
 void dax_log_set_default_topics(char *topics);
 void dax_log(uint32_t topic, const char *format, ...);
+void dax_vlog(uint32_t topic, const char *format, va_list arg);
 
 /* Create and destroy connections to the server */
 int dax_connect(dax_state *ds);      /* Connect to the server */

@@ -285,9 +285,8 @@ dax_log_set_default_topics(char *topics) {
 }
 
 
-/* Function for sending log messages.  _log_mask is a bit mask
-   that is used to decide whether this message should actually get
-   logged */
+/* Function for sending log messages.  topic will be used
+   to determine if the message will be sent. */
 void
 dax_log(uint32_t topic, const char *format, ...)
 {
@@ -298,6 +297,30 @@ dax_log(uint32_t topic, const char *format, ...)
     va_start(val, format);
     vsnprintf(output, LOG_STRING_SIZE, format, val);
     va_end(val);
+    if(_service_count == 0 && _default_topics & topic) {
+        printf("[%s] %s: %s\n",_name, _topic_to_string(topic), output);
+    } else {
+        /* Loop through the services and call the function if
+           we have a match */
+        for(int n = 0;n < _service_count;n++) {
+            if(_services[n].mask & topic) {
+                _services[n].log_func(topic, _services[n].data, output);
+            }
+        }
+    }
+}
+
+/* Function for sending log messages.  topic will be used
+   to determine if the message will be sent. This one would
+   be used if we are printing log messages from a library that
+   is already sending us a va_list for the format arguments */
+void
+dax_vlog(uint32_t topic, const char *format, va_list arg)
+{
+    char output[LOG_STRING_SIZE];
+
+    /* Format the string */
+    vsnprintf(output, LOG_STRING_SIZE, format, arg);
     if(_service_count == 0 && _default_topics & topic) {
         printf("[%s] %s: %s\n",_name, _topic_to_string(topic), output);
     } else {
