@@ -24,6 +24,16 @@
 #include <opendax.h>
 #include <open62541/server.h>
 
+/* This structure is being used to assign context to the node inside the
+   OPC UA server as well as used as user data for the dax event for the
+   the write event on the tag that matches the node. */
+typedef struct {
+    UA_Server *server;
+    UA_NodeId nodeId;
+    tag_handle h;
+    int skip;          /* Used to stop a write event callback loop between OPCUA and OpenDAX */
+} node_context_t;
+
 int opcua_configure(dax_state *ds, int argc, char *argv[]);
 
 int addTagVariable(UA_Server *server, dax_tag *tag);

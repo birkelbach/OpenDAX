@@ -27,6 +27,7 @@
 #include <stdlib.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <pthread.h>
 
 #include "daxopcua.h"
 
@@ -34,7 +35,7 @@
 dax_state *ds;
 UA_Boolean running = true;
 
-static void stopHandler(int sign) {
+static void __getout(int sign) {
     running = false;
 }
 
@@ -102,11 +103,23 @@ __add_tags(UA_Server *server)
     return 0;
 }
 
+static void *
+__event_thread(void *data) {
+    while(running) {
+        dax_event_wait(ds, 500, NULL);
+    }
+    dax_log(DAX_LOG_MAJOR, "Event thread shutting down");
+    return NULL;
+}
+
 int
 main(int argc, char *argv[]) {
     int result;
-    signal(SIGINT, stopHandler);
-    signal(SIGTERM, stopHandler);
+    pthread_attr_t attr;
+    pthread_t eventThread;
+
+    signal(SIGINT, __getout);
+    signal(SIGTERM, __getout);
 
 
     ds = dax_init("daxopcua");
@@ -129,6 +142,8 @@ main(int argc, char *argv[]) {
         exit(-1);
     }
 
+    dax_set_disconnect_callback(ds, __getout);
+
     UA_ServerConfig *config = (UA_ServerConfig *)UA_malloc(sizeof(UA_ServerConfig));
     memset(config, 0, sizeof(UA_ServerConfig));
     config->logging = (UA_Logger*)UA_malloc(sizeof(UA_Logger));
@@ -145,6 +160,15 @@ main(int argc, char *argv[]) {
 
     if(__add_tags(server)) {
         exit(-1);
+    }
+
+    pthread_attr_init(&attr);
+    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+    if(pthread_create(&eventThread, &attr, __event_thread, NULL)) {
+        dax_log(DAX_LOG_FATAL, "Unable to start main event thread");
+        exit(-1);
+    } else {
+        dax_log(DAX_LOG_MAJOR, "Main event thread started");
     }
 
     dax_set_running(ds, 1);

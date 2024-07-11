@@ -36,10 +36,11 @@ show_tag(int n, dax_tag temp_tag)
         printf("[%d]", temp_tag.count);
     }
     if(temp_tag.attr) {
-        if(temp_tag.attr & TAG_ATTR_READONLY) printf(" READONLY");
-        if(temp_tag.attr & TAG_ATTR_VIRTUAL)  printf(" VIRTUAL");
-        if(temp_tag.attr & TAG_ATTR_RETAIN)   printf(" RETAINED");
-        if(temp_tag.attr & TAG_ATTR_OVR_SET) printf(" OVERRIDE");
+        if(temp_tag.attr & TAG_ATTR_READONLY) printf(" RO");
+        if(temp_tag.attr & TAG_ATTR_VIRTUAL)  printf(" VIRT");
+        if(temp_tag.attr & TAG_ATTR_RETAIN)   printf(" RET");
+        if(temp_tag.attr & TAG_ATTR_OVR_SET) printf(" OVR");
+        if(temp_tag.attr & TAG_ATTR_SPECIAL) printf(" SP");
     }
     printf("\n");
 }

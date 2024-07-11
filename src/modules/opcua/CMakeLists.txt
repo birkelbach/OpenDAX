@@ -18,5 +18,7 @@ add_executable(daxopcua daxopcua.c opcuaopt.c opcuadatabase.c)
 target_link_libraries(daxopcua dax)
 target_link_libraries(daxopcua ${LUA_LIBRARIES})
 target_link_libraries(daxopcua open62541)
+target_link_libraries(daxopcua pthread)
+
 
 install(TARGETS daxopcua DESTINATION bin)
