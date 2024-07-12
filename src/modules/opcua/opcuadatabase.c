@@ -80,8 +80,6 @@ __update_variable_node(node_context_t *nc) {
             if(type == UA_TYPES_DATETIME) {
                 daxt = (uint64_t *)buff;
                 dt = UA_DateTime_fromUnixTime(*daxt/1000) + ((*daxt)%1000 * 10000);
-                //dt = *((uint64_t *)buff) * UA_DATETIME_MSEC;
-                DF("daxt = %ld, dt = %ld", *daxt, dt);
                 UA_Variant_setScalar(&value, &dt, &UA_TYPES[type]);
             } else {
                 UA_Variant_setScalar(&value, buff, &UA_TYPES[type]);

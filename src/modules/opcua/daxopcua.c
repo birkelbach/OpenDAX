@@ -112,11 +112,59 @@ __event_thread(void *data) {
     return NULL;
 }
 
+static void
+__add_tag_event_callback(dax_state *ds, void *udata) {
+    uint8_t buff[TAG_TYPE_SIZE];
+    dax_tag tag;
+    UA_Server *server = (UA_Server *)udata;
+
+    dax_event_get_data(ds, buff, TAG_TYPE_SIZE);
+
+    tag.idx = *((tag_index *)buff);
+    tag.type = *((tag_type *)&buff[4]);
+    tag.count = *((dax_udint *)&buff[8]);
+    tag.attr = *((uint16_t *)&buff[12]);
+    memcpy(tag.name, &buff[14], DAX_TAGNAME_SIZE + 1);
+
+    addTagVariable(server, &tag);
+}
+
+static void
+__del_tag_event_callback(dax_state *ds, void *udata) {
+    uint8_t buff[TAG_TYPE_SIZE];
+    dax_tag tag;
+    UA_Server *server = (UA_Server *)udata;
+    UA_NodeId nid;
+    tag_handle h;
+
+    dax_event_get_data(ds, buff, TAG_TYPE_SIZE);
+
+    tag.idx = *((tag_index *)buff);
+    tag.type = *((tag_type *)&buff[4]);
+    tag.count = *((dax_udint *)&buff[8]);
+    tag.attr = *((uint16_t *)&buff[12]);
+    memcpy(tag.name, &buff[14], DAX_TAGNAME_SIZE + 1);
+    /* We are just reading the tag to remove it from the cache */
+    h.index = tag.idx;
+    h.bit = 0;
+    h.byte = 0;
+    h.count = tag.count;
+    h.type = tag.type;
+    h.size = 1;
+    dax_tag_read(ds, h, buff);
+
+    nid = UA_NODEID_STRING_ALLOC(1, tag.name);
+    UA_Server_deleteNode(server, nid, false);
+}
+
+
 int
 main(int argc, char *argv[]) {
     int result;
     pthread_attr_t attr;
     pthread_t eventThread;
+    tag_handle h;
+    dax_id id;
 
     signal(SIGINT, __getout);
     signal(SIGTERM, __getout);
@@ -157,6 +205,15 @@ main(int argc, char *argv[]) {
     config->applicationDescription.applicationName = UA_LOCALIZEDTEXT_ALLOC("en", "OpenDAX OPC UA Server");
     config->applicationDescription.applicationType = UA_APPLICATIONTYPE_SERVER;
     UA_Server *server = UA_Server_newWithConfig(config);
+
+    dax_tag_handle(ds, &h, "_tag_added", 0);
+    dax_event_add(ds, &h, EVENT_CHANGE, NULL, &id, __add_tag_event_callback, server, NULL);
+    dax_event_options(ds, id, EVENT_OPT_SEND_DATA);
+
+    dax_tag_handle(ds, &h, "_tag_deleted", 0);
+    dax_event_add(ds, &h, EVENT_CHANGE, NULL, &id, __del_tag_event_callback, server, NULL);
+    dax_event_options(ds, id, EVENT_OPT_SEND_DATA);
+
 
     if(__add_tags(server)) {
         exit(-1);

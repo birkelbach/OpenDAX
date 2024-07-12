@@ -24,6 +24,9 @@
 #include <opendax.h>
 #include <open62541/server.h>
 
+/* this is the size of the _tag_desc CDT type */
+#define TAG_TYPE_SIZE 47
+
 /* This structure is being used to assign context to the node inside the
    OPC UA server as well as used as user data for the dax event for the
    the write event on the tag that matches the node. */
