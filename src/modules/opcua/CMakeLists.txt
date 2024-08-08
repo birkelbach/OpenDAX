@@ -14,7 +14,7 @@
 #  along with this program; if not, write to the Free Software
 #  Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
 
-add_executable(daxopcua daxopcua.c opcuaopt.c opcuadatabase.c)
+add_executable(daxopcua daxopcua.c opcuaopt.c opcuadatabase.c opcuatype.c)
 target_link_libraries(daxopcua dax)
 target_link_libraries(daxopcua ${LUA_LIBRARIES})
 target_link_libraries(daxopcua open62541)

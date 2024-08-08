@@ -34,11 +34,16 @@
 
 dax_state *ds;
 UA_Boolean running = true;
+UA_Server *server;
+
+pthread_cond_t dtcond = PTHREAD_COND_INITIALIZER;
+pthread_mutex_t dtlock = PTHREAD_MUTEX_INITIALIZER;
+datatype_t *dtdata;
+
 
 static void __getout(int sign) {
     running = false;
 }
-
 
 
 
@@ -105,6 +110,11 @@ __add_tags(UA_Server *server)
 
 static void *
 __event_thread(void *data) {
+
+    if(__add_tags(server)) {
+        exit(-1);
+    }
+
     while(running) {
         dax_event_wait(ds, 500, NULL);
     }
@@ -158,6 +168,66 @@ __del_tag_event_callback(dax_state *ds, void *udata) {
 }
 
 
+
+const UA_NodeId pointVariableTypeId = { 1, UA_NODEIDTYPE_NUMERIC, {4243} };
+
+
+static void add3DPointDataType(UA_Server* server)
+{
+    UA_DataTypeAttributes attr = UA_DataTypeAttributes_default;
+    attr.displayName = UA_LOCALIZEDTEXT("en-US", "3D Point Type");
+
+    UA_Server_addDataTypeNode(
+        server, PointType.typeId, UA_NODEID_NUMERIC(0, UA_NS0ID_STRUCTURE),
+        UA_NODEID_NUMERIC(0, UA_NS0ID_HASSUBTYPE), UA_QUALIFIEDNAME(1, "3D.Point"), attr, NULL, NULL);
+}
+
+static void
+add3DPointVariableType(UA_Server *server) {
+    UA_VariableTypeAttributes dattr = UA_VariableTypeAttributes_default;
+    dattr.description = UA_LOCALIZEDTEXT("en-US", "3D Point");
+    dattr.displayName = UA_LOCALIZEDTEXT("en-US", "3D Point");
+    dattr.dataType = PointType.typeId;
+    dattr.valueRank = UA_VALUERANK_SCALAR;
+
+    UA_Double p[3];
+    p[0] = 0.0;
+    p[1] = 0.0;
+    p[2] = 0.0;
+    UA_Variant_setScalar(&dattr.value, &p, &PointType);
+
+    UA_Server_addVariableTypeNode(server, pointVariableTypeId,
+                                  UA_NODEID_NUMERIC(0, UA_NS0ID_BASEDATAVARIABLETYPE),
+                                  UA_NODEID_NUMERIC(0, UA_NS0ID_HASSUBTYPE),
+                                  UA_QUALIFIEDNAME(1, "3D.Point"),
+                                  UA_NODEID_NUMERIC(0, UA_NS0ID_BASEDATAVARIABLETYPE),
+                                  dattr, NULL, NULL);
+
+}
+
+
+static void
+add3DPointVariable(UA_Server *server) {
+    UA_Double p[3];
+    p[0] = 3.0;
+    p[1] = 8.7;
+    p[2] = 5.0;
+    UA_VariableAttributes vattr = UA_VariableAttributes_default;
+    vattr.description = UA_LOCALIZEDTEXT("en-US", "3D Point");
+    vattr.displayName = UA_LOCALIZEDTEXT("en-US", "3D Point");
+    vattr.dataType = PointType.typeId;
+    vattr.valueRank = UA_VALUERANK_SCALAR;
+    UA_Variant_setScalar(&vattr.value, &p, &PointType);
+
+    UA_Server_addVariableNode(server, UA_NODEID_STRING(1, "3D.PointVar"),
+                              UA_NODEID_NUMERIC(0, UA_NS0ID_OBJECTSFOLDER),
+                              UA_NODEID_NUMERIC(0, UA_NS0ID_ORGANIZES),
+                              UA_QUALIFIEDNAME(1, "3D.PointVar"),
+                              pointVariableTypeId, vattr, NULL, NULL);
+}
+
+
+
 int
 main(int argc, char *argv[]) {
     int result;
@@ -165,6 +235,7 @@ main(int argc, char *argv[]) {
     pthread_t eventThread;
     tag_handle h;
     dax_id id;
+    uint64_t loopcount = 0;
 
     signal(SIGINT, __getout);
     signal(SIGTERM, __getout);
@@ -204,7 +275,8 @@ main(int argc, char *argv[]) {
     config->applicationDescription.productUri = UA_String_fromChars("https://opendax.org");
     config->applicationDescription.applicationName = UA_LOCALIZEDTEXT_ALLOC("en", "OpenDAX OPC UA Server");
     config->applicationDescription.applicationType = UA_APPLICATIONTYPE_SERVER;
-    UA_Server *server = UA_Server_newWithConfig(config);
+
+    server = UA_Server_newWithConfig(config);
 
     dax_tag_handle(ds, &h, "_tag_added", 0);
     dax_event_add(ds, &h, EVENT_CHANGE, NULL, &id, __add_tag_event_callback, server, NULL);
@@ -213,11 +285,6 @@ main(int argc, char *argv[]) {
     dax_tag_handle(ds, &h, "_tag_deleted", 0);
     dax_event_add(ds, &h, EVENT_CHANGE, NULL, &id, __del_tag_event_callback, server, NULL);
     dax_event_options(ds, id, EVENT_OPT_SEND_DATA);
-
-
-    if(__add_tags(server)) {
-        exit(-1);
-    }
 
     pthread_attr_init(&attr);
     pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
@@ -229,12 +296,38 @@ main(int argc, char *argv[]) {
     }
 
     dax_set_running(ds, 1);
-    dax_log(DAX_LOG_MINOR, "OPC UA Module Starting");
+    dax_log(DAX_LOG_MAJOR, "OPC UA Module Starting");
 
-    UA_StatusCode retval = UA_Server_run(server, &running);
+
+    // if(UA_Server_addTimedCallback(server, __startup_callback, NULL, 2e6L, NULL)) {
+    //     dax_log(DAX_LOG_ERROR, "unable to add startup callback");
+    // }
+
+
+    /* Server Main Loop */
+    UA_Server_run_startup(server);
+    /* Should the server networklayer block (with a timeout) until a message
+       arrives or should it return immediately? */
+    UA_Boolean waitInternal = true;
+    while(running) {
+
+        UA_Server_run_iterate(server, waitInternal);
+
+        /* This is where we add a custom data type to the server configuration */
+        pthread_mutex_lock(&dtlock);
+        if(dtdata != NULL) {
+            DF("Condition");
+            dtdata = NULL;
+            pthread_cond_signal(&dtcond);
+        }
+        pthread_mutex_unlock(&dtlock);
+
+    }
+    UA_Server_run_shutdown(server);
 
     UA_Server_delete(server);
     UA_free(config->logging);
     UA_free(config);
-    return retval == UA_STATUSCODE_GOOD ? EXIT_SUCCESS : EXIT_FAILURE;
+
+    return EXIT_SUCCESS;
 }

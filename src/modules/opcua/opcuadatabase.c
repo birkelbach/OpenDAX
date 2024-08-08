@@ -24,8 +24,8 @@
 extern dax_state *ds;
 
 
-static int
-__get_base_type(tag_type type) {
+int
+get_ua_base_type(tag_type type) {
    switch(type) {
         case DAX_BOOL:
             return UA_TYPES_BOOLEAN;
@@ -53,7 +53,6 @@ __get_base_type(tag_type type) {
         case DAX_ULINT:
             return UA_TYPES_UINT64;
         case DAX_TIME:
-            //return ERR_NOTIMPLEMENTED;
             return UA_TYPES_DATETIME;
         case DAX_LREAL:
             return UA_TYPES_DOUBLE;
@@ -73,7 +72,7 @@ __update_variable_node(node_context_t *nc) {
 
     UA_Variant_init(&value);
 
-    type = __get_base_type(nc->h.type);
+    type = get_ua_base_type(nc->h.type);
     if(type > 0) {
         result = dax_tag_read(ds, nc->h, buff);
         if(! result) {
@@ -163,6 +162,7 @@ int
 addTagVariable(UA_Server *server, dax_tag *tag) {
     dax_id id;
     int result;
+    datatype_t * type;
 
     dax_log(DAX_LOG_DEBUG, "Adding variable for tag %s", tag->name);
     /* Define the attribute of the myInteger variable node */
@@ -172,11 +172,17 @@ addTagVariable(UA_Server *server, dax_tag *tag) {
     attr.description = UA_LOCALIZEDTEXT("en-US","TODO");
     attr.displayName = UA_LOCALIZEDTEXT("en-US",tag->name);
 
-    result = __get_base_type(tag->type);
-    if(result > 0) {
-        attr.dataType = UA_TYPES[result].typeId;
+    if(IS_CUSTOM(tag->type)) {
+        DF("Tag: %s is a CDT of type %d", tag->name, tag->type);
+        type = getTypePointer(server, tag->type);
+        return ERR_NOTIMPLEMENTED;
     } else {
-        return result;
+        result = get_ua_base_type(tag->type);
+        if(result > 0) {
+            attr.dataType = UA_TYPES[result].typeId;
+        } else {
+            return result;
+        }
     }
 
     /* TODO: Handle Arrays and CDTs */

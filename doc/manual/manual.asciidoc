@@ -478,3 +478,6 @@ include::daxlua.asciidoc[]
 
 include::mqtt.asciidoc[]
 
+== OPC UA Module
+
+include::opcua.asciidoc[]

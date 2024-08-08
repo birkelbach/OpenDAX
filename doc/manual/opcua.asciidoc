@@ -1,0 +1,6 @@
+The daxopcua module allows OpenDAX to be used as an OPC UA server.
+
+=== Configuration
+
+
+=== Detailed Description
