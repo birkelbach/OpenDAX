@@ -168,66 +168,6 @@ __del_tag_event_callback(dax_state *ds, void *udata) {
 }
 
 
-
-const UA_NodeId pointVariableTypeId = { 1, UA_NODEIDTYPE_NUMERIC, {4243} };
-
-
-static void add3DPointDataType(UA_Server* server)
-{
-    UA_DataTypeAttributes attr = UA_DataTypeAttributes_default;
-    attr.displayName = UA_LOCALIZEDTEXT("en-US", "3D Point Type");
-
-    UA_Server_addDataTypeNode(
-        server, PointType.typeId, UA_NODEID_NUMERIC(0, UA_NS0ID_STRUCTURE),
-        UA_NODEID_NUMERIC(0, UA_NS0ID_HASSUBTYPE), UA_QUALIFIEDNAME(1, "3D.Point"), attr, NULL, NULL);
-}
-
-static void
-add3DPointVariableType(UA_Server *server) {
-    UA_VariableTypeAttributes dattr = UA_VariableTypeAttributes_default;
-    dattr.description = UA_LOCALIZEDTEXT("en-US", "3D Point");
-    dattr.displayName = UA_LOCALIZEDTEXT("en-US", "3D Point");
-    dattr.dataType = PointType.typeId;
-    dattr.valueRank = UA_VALUERANK_SCALAR;
-
-    UA_Double p[3];
-    p[0] = 0.0;
-    p[1] = 0.0;
-    p[2] = 0.0;
-    UA_Variant_setScalar(&dattr.value, &p, &PointType);
-
-    UA_Server_addVariableTypeNode(server, pointVariableTypeId,
-                                  UA_NODEID_NUMERIC(0, UA_NS0ID_BASEDATAVARIABLETYPE),
-                                  UA_NODEID_NUMERIC(0, UA_NS0ID_HASSUBTYPE),
-                                  UA_QUALIFIEDNAME(1, "3D.Point"),
-                                  UA_NODEID_NUMERIC(0, UA_NS0ID_BASEDATAVARIABLETYPE),
-                                  dattr, NULL, NULL);
-
-}
-
-
-static void
-add3DPointVariable(UA_Server *server) {
-    UA_Double p[3];
-    p[0] = 3.0;
-    p[1] = 8.7;
-    p[2] = 5.0;
-    UA_VariableAttributes vattr = UA_VariableAttributes_default;
-    vattr.description = UA_LOCALIZEDTEXT("en-US", "3D Point");
-    vattr.displayName = UA_LOCALIZEDTEXT("en-US", "3D Point");
-    vattr.dataType = PointType.typeId;
-    vattr.valueRank = UA_VALUERANK_SCALAR;
-    UA_Variant_setScalar(&vattr.value, &p, &PointType);
-
-    UA_Server_addVariableNode(server, UA_NODEID_STRING(1, "3D.PointVar"),
-                              UA_NODEID_NUMERIC(0, UA_NS0ID_OBJECTSFOLDER),
-                              UA_NODEID_NUMERIC(0, UA_NS0ID_ORGANIZES),
-                              UA_QUALIFIEDNAME(1, "3D.PointVar"),
-                              pointVariableTypeId, vattr, NULL, NULL);
-}
-
-
-
 int
 main(int argc, char *argv[]) {
     int result;
@@ -235,7 +175,7 @@ main(int argc, char *argv[]) {
     pthread_t eventThread;
     tag_handle h;
     dax_id id;
-    uint64_t loopcount = 0;
+    //uint64_t loopcount = 0;
 
     signal(SIGINT, __getout);
     signal(SIGTERM, __getout);
@@ -316,6 +256,17 @@ main(int argc, char *argv[]) {
         /* This is where we add a custom data type to the server configuration */
         pthread_mutex_lock(&dtlock);
         if(dtdata != NULL) {
+            UA_DataTypeArray *cdt;
+            UA_ServerConfig *cfg;
+            cdt = malloc(sizeof(UA_DataTypeArray));
+            cfg = UA_Server_getConfig(server);
+            cdt->next = cfg->customDataTypes;
+            /* this cast is to get around the const keyword in the struct def */
+            *(size_t *)&cdt->typesSize = 1;
+            cdt->types = &dtdata->datatype;
+            cdt->cleanup = UA_FALSE;
+            cfg->customDataTypes = cdt;
+
             DF("Condition");
             dtdata = NULL;
             pthread_cond_signal(&dtcond);

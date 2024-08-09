@@ -162,7 +162,7 @@ int
 addTagVariable(UA_Server *server, dax_tag *tag) {
     dax_id id;
     int result;
-    datatype_t * type;
+    datatype_t *type;
 
     dax_log(DAX_LOG_DEBUG, "Adding variable for tag %s", tag->name);
     /* Define the attribute of the myInteger variable node */
@@ -175,7 +175,7 @@ addTagVariable(UA_Server *server, dax_tag *tag) {
     if(IS_CUSTOM(tag->type)) {
         DF("Tag: %s is a CDT of type %d", tag->name, tag->type);
         type = getTypePointer(server, tag->type);
-        return ERR_NOTIMPLEMENTED;
+        attr.dataType = type->datatype.typeId;
     } else {
         result = get_ua_base_type(tag->type);
         if(result > 0) {

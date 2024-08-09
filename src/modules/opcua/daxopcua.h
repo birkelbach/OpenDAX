@@ -44,6 +44,7 @@ typedef struct datatype_t {
     char *name;                     /* Name of the type */
     tag_type dax_type;               /* OpenDAX type id */
     UA_DataType datatype;
+    size_t typesize;
     struct datatype_t *next;        /* Pointer to next struct in the list */
 } datatype_t;
 
