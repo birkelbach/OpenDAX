@@ -37,6 +37,15 @@ typedef struct {
     int skip;          /* Used to stop a write event callback loop between OPCUA and OpenDAX */
 } node_context_t;
 
+/* This structure is used to build a linked list in the data type that indicates
+   how the data is to be copied from dax <-> opcua. */
+typedef struct offset_def_t {
+    uint32_t dax_offset;  /* The offset for this chunk of data in the dax tag */
+    uint32_t opc_offset;  /* The offset for this chunk of data in the opcua variable value */
+    uint16_t count;       /* number of bytes to copy */
+    struct offset_def_t *next;
+} offset_def_t;
+
 
 /* This structure is used as the node to a linked list of data types
 */
@@ -44,6 +53,8 @@ typedef struct datatype_t {
     char *name;                     /* Name of the type */
     tag_type dax_type;               /* OpenDAX type id */
     UA_DataType datatype;
+    size_t typesize;
+    offset_def_t *head;             /* data offset definition linked list */
     struct datatype_t *next;        /* Pointer to next struct in the list */
 } datatype_t;
 
@@ -58,54 +69,4 @@ int addTagVariable(UA_Server *server, dax_tag *tag);
 /* Compound Data Type Handling - opcuatype.c */
 datatype_t * getTypePointer(UA_Server *server, tag_type type);
 
-
-/* The binary encoding id's for the datatypes */
-#define Point_binary_encoding_id        14
-
-
-static UA_DataTypeMember Point_members[3] = {
-    /* x */
-    {
-        UA_TYPENAME("x")           /* .memberName */
-        &UA_TYPES[UA_TYPES_DOUBLE], /* .memberType */
-        0,                         /* .padding */
-        false,                     /* .isArray */
-        false                      /* .isOptional */
-    },
-    /* y */
-    {
-        UA_TYPENAME("y")           /* .memberName */
-        &UA_TYPES[UA_TYPES_DOUBLE], /* .memberType */
-        0,                         /* .padding */
-        false,                     /* .isArray */
-        false                      /* .isOptional */
-    },
-    /* z */
-    {
-        UA_TYPENAME("z")           /* .memberName */
-        &UA_TYPES[UA_TYPES_DOUBLE], /* .memberType */
-        0,                         /* .padding */
-        false,                     /* .isArray */
-        false                      /* .isOptional */
-    }
-};
-
-static const UA_DataType PointType = {
-        UA_TYPENAME("Point")                /* .tyspeName */
-        {1, UA_NODEIDTYPE_NUMERIC, {4242}}, /* .typeId */
-        {1, UA_NODEIDTYPE_NUMERIC, {DAX_CUSTOM}}, /* .binaryEncodingId, the numeric
-                                            identifier used on the wire (the
-                                            namespaceindex is from .typeId) */
-        24,                      /* .memSize */
-        UA_DATATYPEKIND_STRUCTURE,          /* .typeKind */
-        true,                               /* .pointerFree */
-        false,                              /* .overlayable (depends on endianness and
-                                            the absence of padding) */
-        3,                                  /* .membersSize */
-        Point_members
-};
-
-
-
-
-#endif /* __DAXOPCUA_H */
+#endif /* ! __DAXOPCUA_H */

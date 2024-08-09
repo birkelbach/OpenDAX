@@ -61,34 +61,51 @@ get_ua_base_type(tag_type type) {
     }
 }
 
+/* Reads the tag from the tag server and writes it into the
+   variable node.  The node context contains the information
+   needed to do this. */
 static void
 __update_variable_node(node_context_t *nc) {
     int result;
     int type;
-    uint64_t dt;
     uint64_t *daxt;
     UA_Variant value;
     uint8_t buff[nc->h.size];
 
     UA_Variant_init(&value);
 
+    result = dax_tag_read(ds, nc->h, buff);
+    if(result) {
+        dax_log(DAX_LOG_ERROR, "Unable to read tag for node %s", nc->nodeId.identifier.string);
+        return;
+    }
+
     type = get_ua_base_type(nc->h.type);
     if(type > 0) {
-        result = dax_tag_read(ds, nc->h, buff);
-        if(! result) {
-            if(type == UA_TYPES_DATETIME) {
-                daxt = (uint64_t *)buff;
-                dt = UA_DateTime_fromUnixTime(*daxt/1000) + ((*daxt)%1000 * 10000);
-                UA_Variant_setScalar(&value, &dt, &UA_TYPES[type]);
-            } else {
-                UA_Variant_setScalar(&value, buff, &UA_TYPES[type]);
+        if(type == UA_TYPES_DATETIME) {
+            daxt = (uint64_t *)buff;
+
+            for(int n=0; n<nc->h.count; n++) {
+                daxt[n] = UA_DateTime_fromUnixTime(daxt[n]/1000) + (daxt[n]%1000 * 10000);
             }
-            nc->skip = 1; /* Stops us from getting into an event loop */
-            UA_Server_writeValue(nc->server, nc->nodeId, value);
-        } else {
-            dax_log(DAX_LOG_ERROR, "Unable to read tag");
         }
-    } /* TODO: deal with the other data types */
+
+        if(nc->h.count > 1) {
+            UA_UInt32 arrayDims[] = {nc->h.count};
+
+            UA_Variant_setArray(&value, buff, nc->h.count, &UA_TYPES[type]);
+            value.arrayDimensions = arrayDims;
+            value.arrayDimensionsSize = 1;
+        } else {
+            UA_Variant_setScalar(&value, buff, &UA_TYPES[type]);
+        }
+        // TODO: There may be a way to inhibit events before writing??
+        nc->skip = 1; /* Stops us from getting into an event loop */
+        UA_Server_writeValue(nc->server, nc->nodeId, value);
+    } else { /* Not a base type so it's a CDT / structure */
+        /* TODO: deal with the other data types */;
+    }
+
 }
 
 
@@ -110,20 +127,30 @@ __afterWriteTagCallback(UA_Server *server,
                const UA_NumericRange *range, const UA_DataValue *data) {
     int result;
     node_context_t *nc = (node_context_t *)nodeContext;
+    uint64_t *dt;
+
     if(nc->skip) {
         nc->skip = 0;
     } else {
+        if(nc->h.type == DAX_TIME) {
+            dt = (uint64_t *)data->value.data;
+            for(int n=0; n<nc->h.count; n++) {
+                dt[n] = UA_DateTime_toUnixTime(dt[n]) * 1000 + (dt[n]%10000000 / 10000);
+            }
+        }
         result = dax_tag_write(ds, nc->h, data->value.data);
         nc->skip = 1;
         if(result) dax_log(DAX_LOG_ERROR, "Failure to write tag");
     }
 }
 
-
+/* Dax Write event callback */
 static void
 __writeEventCallback(dax_state *ds, void *udata) {
     node_context_t *nc = (node_context_t *)udata;
 
+    /* If we wrote the value then skip = 1 so we don't want to keep doing it or we'll
+       be in an infinite event generating loop. */
     if(nc->skip) {
         nc->skip = 0;
     } else {
@@ -131,7 +158,8 @@ __writeEventCallback(dax_state *ds, void *udata) {
     }
 }
 
-/* The pointer that gets freed here is also assigned to the node context so be careful */
+/* Tag event free callback.  udata is the node_context_t structure
+   for the tag/node */
 static void
 __freeEventCallback(void *udata) {
     node_context_t *nc = (node_context_t *)udata;
@@ -139,11 +167,13 @@ __freeEventCallback(void *udata) {
     free(udata);
 }
 
-
+/* Adds the two read/write callbacks to the variable node identified by nodeid */
 static void
 __addValueCallback(UA_Server *server, UA_NodeId nodeid, uint16_t attr) {
     UA_ValueCallback callback ;
 
+    /* We only need the before read callback on virtual tags because we use
+       a write event from the tag server to keep the opcua database updated. */
     if(attr & TAG_ATTR_VIRTUAL) {
         callback.onRead = __beforeReadTagCallback;
     } else {
@@ -158,11 +188,13 @@ __addValueCallback(UA_Server *server, UA_NodeId nodeid, uint16_t attr) {
     UA_Server_setVariableNode_valueCallback(server, nodeid, callback);
 }
 
+
+/* Adds a variable to the opcua server that represents the given tag*/
 int
 addTagVariable(UA_Server *server, dax_tag *tag) {
     dax_id id;
     int result;
-    datatype_t * type;
+    datatype_t *type;
 
     dax_log(DAX_LOG_DEBUG, "Adding variable for tag %s", tag->name);
     /* Define the attribute of the myInteger variable node */
@@ -175,14 +207,20 @@ addTagVariable(UA_Server *server, dax_tag *tag) {
     if(IS_CUSTOM(tag->type)) {
         DF("Tag: %s is a CDT of type %d", tag->name, tag->type);
         type = getTypePointer(server, tag->type);
-        return ERR_NOTIMPLEMENTED;
+        attr.dataType = type->datatype.typeId;
     } else {
         result = get_ua_base_type(tag->type);
-        if(result > 0) {
+        if(result >= 0) {
             attr.dataType = UA_TYPES[result].typeId;
         } else {
             return result;
         }
+    }
+    if(tag->count > 1) {
+        attr.valueRank = UA_VALUERANK_ONE_DIMENSION;
+        UA_UInt32 arrayDims[1] = {tag->count};
+        attr.arrayDimensions = arrayDims;
+        attr.arrayDimensionsSize = 1;
     }
 
     /* TODO: Handle Arrays and CDTs */
