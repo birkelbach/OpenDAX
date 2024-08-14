@@ -265,7 +265,6 @@ main(int argc, char *argv[]) {
             cdt->cleanup = UA_FALSE;
             cfg->customDataTypes = cdt;
 
-            DF("Condition");
             dtdata = NULL;
             pthread_cond_signal(&dtcond);
         }

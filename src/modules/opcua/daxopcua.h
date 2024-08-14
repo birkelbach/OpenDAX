@@ -34,17 +34,9 @@ typedef struct {
     UA_Server *server;
     UA_NodeId nodeId;
     tag_handle h;
+    int readOnly;
     int skip;          /* Used to stop a write event callback loop between OPCUA and OpenDAX */
 } node_context_t;
-
-/* This structure is used to build a linked list in the data type that indicates
-   how the data is to be copied from dax <-> opcua. */
-typedef struct offset_def_t {
-    uint32_t dax_offset;  /* The offset for this chunk of data in the dax tag */
-    uint32_t opc_offset;  /* The offset for this chunk of data in the opcua variable value */
-    uint16_t count;       /* number of bytes to copy */
-    struct offset_def_t *next;
-} offset_def_t;
 
 
 /* This structure is used as the node to a linked list of data types
@@ -54,7 +46,6 @@ typedef struct datatype_t {
     tag_type dax_type;               /* OpenDAX type id */
     UA_DataType datatype;
     size_t typesize;
-    offset_def_t *head;             /* data offset definition linked list */
     struct datatype_t *next;        /* Pointer to next struct in the list */
 } datatype_t;
 

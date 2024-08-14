@@ -71,17 +71,19 @@ __update_variable_node(node_context_t *nc) {
     uint64_t *daxt;
     UA_Variant value;
     uint8_t buff[nc->h.size];
+    UA_Boolean buff2[nc->h.count];
+    UA_UInt32 arrayDims[] = {nc->h.count};
 
     UA_Variant_init(&value);
 
     result = dax_tag_read(ds, nc->h, buff);
     if(result) {
-        dax_log(DAX_LOG_ERROR, "Unable to read tag for node %s", nc->nodeId.identifier.string);
+        dax_log(DAX_LOG_ERROR, "Unable to read tag for node %.*s", (int)nc->nodeId.identifier.string.length, nc->nodeId.identifier.string.data);
         return;
     }
 
     type = get_ua_base_type(nc->h.type);
-    if(type > 0) {
+    if(type >= 0) {
         if(type == UA_TYPES_DATETIME) {
             daxt = (uint64_t *)buff;
 
@@ -91,17 +93,26 @@ __update_variable_node(node_context_t *nc) {
         }
 
         if(nc->h.count > 1) {
-            UA_UInt32 arrayDims[] = {nc->h.count};
-
-            UA_Variant_setArray(&value, buff, nc->h.count, &UA_TYPES[type]);
+            if(nc->h.type == DAX_BOOL) {
+                for(int n=0; n<nc->h.count; n++) {
+                    buff2[n] = (buff[n/8] & (0x01 << n%8)) ? true : false;
+                }
+                UA_Variant_setArray(&value, buff2, nc->h.count, &UA_TYPES[type]);
+            } else {
+                UA_Variant_setArray(&value, buff, nc->h.count, &UA_TYPES[type]);
+            }
             value.arrayDimensions = arrayDims;
             value.arrayDimensionsSize = 1;
         } else {
             UA_Variant_setScalar(&value, buff, &UA_TYPES[type]);
         }
-        // TODO: There may be a way to inhibit events before writing??
-        nc->skip = 1; /* Stops us from getting into an event loop */
-        UA_Server_writeValue(nc->server, nc->nodeId, value);
+
+        if(! nc->readOnly) nc->skip = 1; /* Stops us from getting into an event loop for writable tags */
+        UA_StatusCode scode = UA_Server_writeValue(nc->server, nc->nodeId, value);
+        if(scode != UA_STATUSCODE_GOOD) {
+            dax_log(DAX_LOG_ERROR, "Error writing value to server.  Status code = %d", scode);
+        }
+
     } else { /* Not a base type so it's a CDT / structure */
         /* TODO: deal with the other data types */;
     }
@@ -128,6 +139,7 @@ __afterWriteTagCallback(UA_Server *server,
     int result;
     node_context_t *nc = (node_context_t *)nodeContext;
     uint64_t *dt;
+    uint8_t buff[nc->h.size];
 
     if(nc->skip) {
         nc->skip = 0;
@@ -137,8 +149,20 @@ __afterWriteTagCallback(UA_Server *server,
             for(int n=0; n<nc->h.count; n++) {
                 dt[n] = UA_DateTime_toUnixTime(dt[n]) * 1000 + (dt[n]%10000000 / 10000);
             }
+        } else if(nc->h.type == DAX_BOOL) {
+            uint8_t *d = (uint8_t *)data->value.data;
+            bzero(buff, nc->h.size);
+            for(int n=0; n<nc->h.count; n++) {
+                if(d[n]) {
+                    buff[n/8] |= 0x01 << n%8;
+                }
+            }
         }
-        result = dax_tag_write(ds, nc->h, data->value.data);
+        if(nc->h.type == DAX_BOOL) {
+            result = dax_tag_write(ds, nc->h, buff);
+        } else {
+            result = dax_tag_write(ds, nc->h, data->value.data);
+        }
         nc->skip = 1;
         if(result) dax_log(DAX_LOG_ERROR, "Failure to write tag");
     }
@@ -205,7 +229,6 @@ addTagVariable(UA_Server *server, dax_tag *tag) {
     attr.displayName = UA_LOCALIZEDTEXT("en-US",tag->name);
 
     if(IS_CUSTOM(tag->type)) {
-        DF("Tag: %s is a CDT of type %d", tag->name, tag->type);
         type = getTypePointer(server, tag->type);
         attr.dataType = type->datatype.typeId;
     } else {
@@ -219,19 +242,25 @@ addTagVariable(UA_Server *server, dax_tag *tag) {
     if(tag->count > 1) {
         attr.valueRank = UA_VALUERANK_ONE_DIMENSION;
         UA_UInt32 arrayDims[1] = {tag->count};
+        // uint8_t buff[type->datatype.memSize];
+        // bzero(buff, type->datatype.memSize);
+        // UA_Variant_setArray(&attr.value, buff, tag->count, attr.dataType);
         attr.arrayDimensions = arrayDims;
         attr.arrayDimensionsSize = 1;
+        attr.value.arrayDimensions = arrayDims;
+        attr.value.arrayDimensionsSize = 1;
     }
 
-    /* TODO: Handle Arrays and CDTs */
+    node_context_t *nc = malloc(sizeof(node_context_t));
 
     if(tag->attr & TAG_ATTR_READONLY || tag->attr & TAG_ATTR_SPECIAL) {
         attr.accessLevel = UA_ACCESSLEVELMASK_READ;
+        nc->readOnly = 1;
     } else {
         attr.accessLevel = UA_ACCESSLEVELMASK_READ | UA_ACCESSLEVELMASK_WRITE;
+        nc->readOnly = 0;
     }
     /* Add the variable node to the information model */
-    node_context_t *nc = malloc(sizeof(node_context_t));
     nc->nodeId = UA_NODEID_STRING_ALLOC(1, tag->name);
     UA_QualifiedName myIntegerName = UA_QUALIFIEDNAME(1, tag->name);
     UA_NodeId parentNodeId = UA_NODEID_NUMERIC(0, UA_NS0ID_OBJECTSFOLDER);

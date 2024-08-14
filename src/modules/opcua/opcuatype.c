@@ -32,18 +32,8 @@ static datatype_t *datatypes;
 
 static void
 __type_iterator_callback(cdt_iter member, void *udata) {
-    static tag_type last_type;
-    static uint32_t offset;
-
     datatype_t *dt = (datatype_t *)udata;
 
-    if(dt->datatype.membersSize == 0) { /* Indicates that this is the first call for this type. */
-        /* Reset the static data on first call */
-        last_type = 0;
-        offset = 0;
-    }
-
-    DF("Add membmer %s to index %d", member.name, dt->datatype.membersSize);
     dt->datatype.members[dt->datatype.membersSize].memberName = member.name;
     assert(IS_CUSTOM(member.type) == 0); // TODO FIX THIS
     dt->datatype.members[dt->datatype.membersSize].memberType = &UA_TYPES[get_ua_base_type(member.type)];
