@@ -219,6 +219,7 @@ addTagVariable(UA_Server *server, dax_tag *tag) {
     dax_id id;
     int result;
     datatype_t *type;
+    UA_UInt32 arrayDims[1] = {tag->count};
 
     dax_log(DAX_LOG_DEBUG, "Adding variable for tag %s", tag->name);
     /* Define the attribute of the myInteger variable node */
@@ -239,12 +240,9 @@ addTagVariable(UA_Server *server, dax_tag *tag) {
             return result;
         }
     }
+
     if(tag->count > 1) {
         attr.valueRank = UA_VALUERANK_ONE_DIMENSION;
-        UA_UInt32 arrayDims[1] = {tag->count};
-        // uint8_t buff[type->datatype.memSize];
-        // bzero(buff, type->datatype.memSize);
-        // UA_Variant_setArray(&attr.value, buff, tag->count, attr.dataType);
         attr.arrayDimensions = arrayDims;
         attr.arrayDimensionsSize = 1;
         attr.value.arrayDimensions = arrayDims;
