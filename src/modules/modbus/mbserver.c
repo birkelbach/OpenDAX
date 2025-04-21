@@ -280,7 +280,7 @@ server_loop(mb_port *port)
             if(result == MB_ERR_OVERFLOW) {
                 dax_log(DAX_LOG_ERROR, "Buffer Overflow Attempt");
             } else {
-                return result;
+                dax_log(DAX_LOG_ERROR, "Receive error - %s", strerror(result));
             }
         }
     }

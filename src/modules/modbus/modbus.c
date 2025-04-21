@@ -909,11 +909,11 @@ create_response(mb_port *port, unsigned char *buff, int size)
                 result = lua_tointeger(L, -1);
             }
         }
-    }
-    /* If the Lua callback function returns a non-zero integer then create an
-       exception message with that integer */
-    if(result) {
-        return _create_exception(buff, result);
+        /* If the Lua callback function returns a non-zero integer then create an
+        exception message with that integer */
+        if(result) {
+            return _create_exception(buff, result);
+        }
     }
     if(_check_function_code_exception(port, node, function)) {
         return _create_exception(buff, ME_WRONG_FUNCTION);
@@ -1011,12 +1011,12 @@ create_response(mb_port *port, unsigned char *buff, int size)
             } else { /* Success */
                 result = lua_tointeger(L, -1);
             }
+        /* If the write Lua callback returns non-zero then we create an exception for that
+        result.  Otherwise just continue on */
+        if(result) {
+            return _create_exception(buff, result);
         }
-    }
-    /* If the write Lua callback returns non-zero then we create an exception for that
-       result.  Otherwise just continue on */
-    if(result) {
-        return _create_exception(buff, result);
+        }
     }
     return retval;
 }
